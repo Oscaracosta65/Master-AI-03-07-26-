@@ -1662,7 +1662,7 @@ document.addEventListener('DOMContentLoaded', function () {
       
       [[label style="display:block; font-weight:bold; margin:6px 0 2px;"]]Label[[/label]]
 <?php $labelText = $lotteryName . " Prediction – " . date('M j, Y'); ?>
-[[input type="text" name="label" id="saveLabel" value="<?php echo htmlspecialchars($labelText); ?>" style="width:100%; …"]]
+[[input type="text" name="label" id="saveLabel" value="<?php echo htmlspecialchars($labelText); ?>" style="width:100%;"]]
 
       <?php if ($userCanSave): ?>
         [[button type="submit" name="save_set" style="margin-top:10px; padding:7px 15px; background-color:#007bff; color:#fff; border:none; border-radius:5px; font-weight:bold; font-size:13px;"]]
@@ -1835,20 +1835,20 @@ document.addEventListener('DOMContentLoaded', function () {
       [[strong]]1 in <?php echo number_format($totalCombinations) ?>[[/strong]]?
     [[/p]]
 
-    [[p style="text-align:center; font-size:18px; font-weight:bold; color:#2a9d8f;"]]
+    [[p style="text-align:center; font-size:18px; font-weight:bold; color:var(--skai-success);"]]
       But if you choose [[strong]]<?php echo $best['count'] ?>[[/strong]] numbers, your chances improve dramatically to about:
     [[/p]]
 
-    [[p style="text-align:center; font-size:22px; font-weight:bold; margin:10px 0; color:#e67e22;"]]
+    [[p style="text-align:center; font-size:22px; font-weight:bold; margin:10px 0; color:var(--skai-amber);"]]
       1 in <?php echo number_format($best['odds']) ?>
     [[/p]]
 
     [[section class="tile"]]
-      [[h3 style="margin-top:0; color:#2a5298;"]]Let's Break This Down Simply[[/h3]]
+      [[h3 style="margin-top:0; color:var(--skai-blue);"]]Let's Break This Down Simply[[/h3]]
 
       [[table style="width:100%; border-collapse:collapse; text-align:center; font-size:14px; margin-top:10px;"]]
         [[thead]]
-          [[tr style="background-color:#264653; color:#fff;"]]
+          [[tr style="background-color:var(--skai-navy); color:#fff;"]]
             [[th style="padding:5px;"]]Your Numbers[[/th]]
             [[th style="padding:5px;"]]Ways to Match[[/th]]
             [[th style="padding:5px;"]]Odds[[/th]]
@@ -1902,10 +1902,10 @@ document.addEventListener('DOMContentLoaded', function () {
     [[/h3]]
     [[p class="mdc-typography--body1" style="line-height:1.6;"]]
       The LottoExpert AI Engine starts with a verified history of past draws from our secure database. Each record includes:[[br/]]
-      [[strong]]Winning numbers:[[​/strong]] the actual numbers drawn in each game.[[br/]]
-      [[strong]]Draw dates:[[​/strong]] when each drawing took place.[[br/]]
-      [[strong]]Jackpot amounts:[[​/strong]] prize size when available.[[br/]]
-      [[strong]]Bonus-ball details:[[​/strong]] Powerball, EuroMillions stars, or other extra balls. [[br/]][[br/]]
+      [[strong]]Winning numbers:[[/strong]] the actual numbers drawn in each game.[[br/]]
+      [[strong]]Draw dates:[[/strong]] when each drawing took place.[[br/]]
+      [[strong]]Jackpot amounts:[[/strong]] prize size when available.[[br/]]
+      [[strong]]Bonus-ball details:[[/strong]] Powerball, EuroMillions stars, or other extra balls. [[br/]][[br/]]
       Automated checks look for duplicates, missing values, and format issues, so the model learns from consistent, trustworthy data.
     [[/p]]
   [[/div]]
@@ -1916,10 +1916,10 @@ document.addEventListener('DOMContentLoaded', function () {
     [[/h3]]
     [[p class="mdc-typography--body1" style="line-height:1.6;"]]
       Raw draws are transformed into features the model can understand:[[br/]]
-      [[strong]]Normalization:[[​/strong]] values are scaled so different ranges are comparable.[[br/]]
-      [[strong]]Vector encoding:[[​/strong]] each draw becomes a consistent numeric “snapshot.”[[br/]]
-      [[strong]]Outlier checks:[[​/strong]] unusual records are reviewed and, if needed, excluded.[[br/]]
-      [[strong]]Time-based features:[[​/strong]] our engine derives patterns like gaps between repeats and rolling averages over recent draws.
+      [[strong]]Normalization:[[/strong]] values are scaled so different ranges are comparable.[[br/]]
+      [[strong]]Vector encoding:[[/strong]] each draw becomes a consistent numeric “snapshot.”[[br/]]
+      [[strong]]Outlier checks:[[/strong]] unusual records are reviewed and, if needed, excluded.[[br/]]
+      [[strong]]Time-based features:[[/strong]] our engine derives patterns like gaps between repeats and rolling averages over recent draws.
     [[/p]]
   [[/div]]
 
@@ -1931,22 +1931,22 @@ document.addEventListener('DOMContentLoaded', function () {
       The LottoExpert AI Engine uses a deep neural network, tuned through a few key settings:
     [[/p]]
     [[dl style="margin-left:16px; line-height:1.6;"]]
-      [[dt]][[strong]]Epochs:[[​/strong]][[/dt]]
+      [[dt]][[strong]]Epochs:[[/strong]][[/dt]]
       [[dd]]How many full passes the model makes through the data. More epochs allow deeper learning, up to a point.[[/dd]]
 
-      [[dt]][[strong]]Batch size:[[​/strong]][[/dt]]
+      [[dt]][[strong]]Batch size:[[/strong]][[/dt]]
       [[dd]]How many past draws the model processes at once before updating itself. This balances speed and stability.[[/dd]]
 
-      [[dt]][[strong]]Dropout rate:[[​/strong]][[/dt]]
+      [[dt]][[strong]]Dropout rate:[[/strong]][[/dt]]
       [[dd]]A fraction of “turned-off” neurons during training that helps prevent overfitting and keeps the model honest.[[/dd]]
 
-      [[dt]][[strong]]Learning rate:[[​/strong]][[/dt]]
+      [[dt]][[strong]]Learning rate:[[/strong]][[/dt]]
       [[dd]]How big a step the model takes when it learns from an error. Too high can be unstable; too low slows improvement.[[/dd]]
 
-      [[dt]][[strong]]Activation function:[[​/strong]][[/dt]]
+      [[dt]][[strong]]Activation function:[[/strong]][[/dt]]
       [[dd]]Non-linear functions (ReLU, Sigmoid, Tanh) that let the network capture more than simple straight-line trends.[[/dd]]
 
-      [[dt]][[strong]]Hidden layers:[[​/strong]][[/dt]]
+      [[dt]][[strong]]Hidden layers:[[/strong]][[/dt]]
       [[dd]]Stacked layers that move from basic frequencies to more subtle co-occurrence patterns between numbers.[[/dd]]
     [[/dl]]
     [[p class="mdc-typography--caption" style="margin-top:8px; color:var(--text-muted); font-style:italic;"]]
@@ -1960,8 +1960,8 @@ document.addEventListener('DOMContentLoaded', function () {
     [[/h3]]
     [[p class="mdc-typography--body1" style="line-height:1.6;"]]
       After training, the LottoExpert AI Engine assigns a probability score to every possible number. From there, it:[[br/]]
-      [[strong]]Ranks:[[​/strong]] orders all numbers from most to least likely, based on the learned patterns.[[br/]]
-      [[strong]]Selects:[[​/strong]] chooses the top candidates (for example, 5 main numbers plus any required bonus balls) for your analysis view.
+      [[strong]]Ranks:[[/strong]] orders all numbers from most to least likely, based on the learned patterns.[[br/]]
+      [[strong]]Selects:[[/strong]] chooses the top candidates (for example, 5 main numbers plus any required bonus balls) for your analysis view.
     [[/p]]
   [[/div]]
 
@@ -1971,8 +1971,8 @@ document.addEventListener('DOMContentLoaded', function () {
     [[/h3]]
     [[p class="mdc-typography--body1" style="line-height:1.6;"]]
       Before you trust any settings, you can replay them on past draws:[[br/]]
-      [[strong]]Configure:[[​/strong]] pick how many draws to test and which metrics you care about (hits, matches, or custom rules).[[br/]]
-      [[strong]]Review:[[​/strong]] compare actual vs. predicted results to see how that configuration behaved historically.
+      [[strong]]Configure:[[/strong]] pick how many draws to test and which metrics you care about (hits, matches, or custom rules).[[br/]]
+      [[strong]]Review:[[/strong]] compare actual vs. predicted results to see how that configuration behaved historically.
     [[/p]]
   [[/div]]
 
@@ -1994,7 +1994,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
   [[section class="tile"]]
-    [[h3 style="margin-top:0; color:#2a5298;"]]
+    [[h3 style="margin-top:0; color:var(--skai-blue);"]]
       Step 3 – Use Wheeling to Spread Your Coverage
     [[/h3]]
 
@@ -2037,12 +2037,12 @@ document.addEventListener('DOMContentLoaded', function () {
   [[/section]]
 
   [[div style="margin-top:15px; background-color:#eafaf1; padding:10px; border-radius:6px; border-left:4px solid #2a9d8f; font-size:0.9rem;"]]
-    [[strong style="color:#264653;"]]Practical tip:[[br]][[/strong]]
+    [[strong style="color:var(--skai-navy);"]]Practical tip:[[br]][[/strong]]
     Let the LottoExpert AI Engine narrow the field to your best numbers, then apply a reduced wheel that fits your budget. This keeps your play structured, not scattered.
   [[/div]]
 
   [[div style="margin-top:10px; background-color:#e9f1fa; padding:10px; border-radius:6px; border-left:4px solid #2b7ae4; font-size:0.9rem;"]]
-    [[strong style="color:#264653;"]]Perspective:[[br]][[/strong]]
+    [[strong style="color:var(--skai-navy);"]]Perspective:[[br]][[/strong]]
     A 20-number selection can represent 15,504 different 5-number combinations. Wheeling does not guarantee a prize, but it can help you touch more of that space in a disciplined way.
   [[/div]]
 
@@ -2059,6 +2059,29 @@ document.addEventListener('DOMContentLoaded', function () {
   
   [[script defer]]
     document.addEventListener('DOMContentLoaded', function() {
+      // ── ES5 compatibility helpers ──────────────────────────────────
+      // Replaces Array.prototype.fill (ES6)
+      function skaiArrayFill(n, val) {
+        var arr = [];
+        for (var _i = 0; _i < n; _i++) { arr.push(val); }
+        return arr;
+      }
+      // Replaces Array.from (ES6) for array-like objects
+      function skaiArrayFrom(arrayLike) {
+        var arr = [];
+        for (var _i = 0; _i < arrayLike.length; _i++) { arr.push(arrayLike[_i]); }
+        return arr;
+      }
+      // Replaces new Set(arr) (ES6) - returns plain object lookup
+      function skaiMakeSet(arr) {
+        var obj = {};
+        for (var _i = 0; _i < arr.length; _i++) { obj[arr[_i]] = true; }
+        return obj;
+      }
+      // Replaces Set.prototype.has (ES6)
+      function skaiSetHas(obj, val) { return obj[val] === true; }
+      // ── end ES5 helpers ─────────────────────────────────────────────
+
         function convertSorcererSyntaxToHTML(str) {
   return str.replace(/\[\[/g, '<').replace(/\]\]/g, '>');
 }
@@ -2870,7 +2893,7 @@ function skaiBrierScore(probMass, actualSet, maxVal) {
   var sum = 0;
   for (var i = 0; i < maxVal; i++) {
     var p = skaiClipProb(probMass[i]);
-    var y = actualSet.has(i + 1) ? 1 : 0;
+    var y = skaiSetHas(actualSet, i + 1) ? 1 : 0;
     var d = p - y;
     sum += d * d;
   }
@@ -2882,7 +2905,7 @@ function skaiLogLoss(probMass, actualSet, maxVal) {
   var sum = 0;
   for (var i = 0; i < maxVal; i++) {
     var p = skaiClipProb(probMass[i]);
-    var y = actualSet.has(i + 1) ? 1 : 0;
+    var y = skaiSetHas(actualSet, i + 1) ? 1 : 0;
     sum += y ? -Math.log(p) : -Math.log(1 - p);
   }
   return sum / maxVal;
@@ -2904,11 +2927,11 @@ function skaiExpectedMassInPicks(probMass, picks) {
 // drawsNumbers: [ [n1, n2, ...], ... ] in OLDEST → NEWEST order.
 // For each draw t, we compute skipVec[t][k] = draws since number (k+1) last appeared BEFORE draw t.
 function computeSkipFeatureSeries(drawsNumbers, pickSize, mainNumbersMax) {
-  var lastHitIndex   = new Array(mainNumbersMax).fill(null);
+  var lastHitIndex   = skaiArrayFill(mainNumbersMax, null);
   var skipsPerStep   = [];
 
   for (var t = 0; t < drawsNumbers.length; t++) {
-    var skipVec = new Array(mainNumbersMax).fill(0);
+    var skipVec = skaiArrayFill(mainNumbersMax, 0);
 
     // For each number, how long since last seen?
     for (var k = 0; k < mainNumbersMax; k++) {
@@ -2960,12 +2983,12 @@ function computeSkipScores(drawsDesc, pickSize, mainNumbersMax) {
   // Convert DESC draws into ASC array of numbers for computeSkipFeatureSeries.
   var drawsAscNumbers = drawsDesc.slice().reverse().map(function(d) { return d.numbers; });
   if (!drawsAscNumbers.length) {
-    return new Array(mainNumbersMax).fill(0);
+    return skaiArrayFill(mainNumbersMax, 0);
   }
 
   var skipSeries = computeSkipFeatureSeries(drawsAscNumbers, pickSize, mainNumbersMax);
   var latestVec  = skipSeries[skipSeries.length - 1] || [];
-  var result     = new Array(mainNumbersMax).fill(0);
+  var result     = skaiArrayFill(mainNumbersMax, 0);
 
   for (var i = 0; i < mainNumbersMax; i++) {
     result[i] = (typeof latestVec[i] === 'number') ? latestVec[i] : 0;
@@ -2974,7 +2997,7 @@ function computeSkipScores(drawsDesc, pickSize, mainNumbersMax) {
   return result;
 }
 
-async function trainModelForBacktest(trainingDraws, settings, onEpochEndCallback) {
+function trainModelForBacktest(trainingDraws, settings, onEpochEndCallback) {
   var pickSize       = settings.PICK_SIZE;
   var mainNumbersMax = settings.MAIN_MAX;
   var extraBallMax   = settings.EXTRA_MAX;
@@ -3004,13 +3027,13 @@ async function trainModelForBacktest(trainingDraws, settings, onEpochEndCallback
     var nextNums = drawsNumbers[i + 1];
 
     // Y for main
-    var mainVec = new Array(mainNumbersMax).fill(0);
+    var mainVec = skaiArrayFill(mainNumbersMax, 0);
     nextNums.slice(0, pickSize).forEach(function(n) { mainVec[n - 1] = 1; });
     ys_main.push(mainVec);
 
     // Y for extra
     if (hasExtraBall) {
-      var extraVec = new Array(extraBallMax).fill(0);
+      var extraVec = skaiArrayFill(extraBallMax, 0);
       extraVec[nextNums[pickSize] - 1] = 1;
       ys_extra.push(extraVec);
     }
@@ -3089,14 +3112,14 @@ async function trainModelForBacktest(trainingDraws, settings, onEpochEndCallback
           //   ? [sampleWeightTensor, sampleWeightTensor]
           //   : sampleWeightTensor;
 
-  await model.fit(xsTensor, yTrain, fitArgs);
-
-
-  return model;
+  return model.fit(xsTensor, yTrain, fitArgs).then(function() {
+    return model;
+  });
 }
 
 
-async function runBacktesting(sortedDrawsAsc, settings) {
+function runBacktesting(sortedDrawsAsc, settings) {
+  return new Promise(function(resolveAll, rejectAll) {
   var results      = [];
   var N            = sortedDrawsAsc.length;
 
@@ -3110,7 +3133,7 @@ async function runBacktesting(sortedDrawsAsc, settings) {
   var totalExpectedMassInPicksExtra = 0;
   var numBacktests = parseInt(document.getElementById('numDrawsBacktest').value) || 3;
   var backtestIndices = [];
-  for (var i = N - numBacktests; i < N; i++) if (i >= 1) backtestIndices.push(i);
+  for (var i = N - numBacktests; i < N; i++) { if (i >= 1) { backtestIndices.push(i); } }
 
   // progress tracking
   var totalSteps = backtestIndices.length * settings.EPOCHS;
@@ -3123,7 +3146,24 @@ async function runBacktesting(sortedDrawsAsc, settings) {
     progressMessage.innerText         = 'System Status: Backtesting in progress... (' + pct + '%)';
   }
 
-  for (var bi = 0; bi < backtestIndices.length; bi++) {
+  // ES5-safe recursive Promise chain replaces async for loop
+  function processBacktestStep(bi) {
+    if (bi >= backtestIndices.length) {
+      // All steps done - build summary and resolve
+      var steps = results.length || 1;
+      results.skaiSummary = {
+        steps: steps,
+        avgBrierMain: (totalBrierMain / steps),
+        avgLogLossMain: (totalLogLossMain / steps),
+        avgExpectedMassMain: (totalExpectedMassInPicksMain / steps),
+        avgBrierExtra: (steps > 0 ? (totalBrierExtra / steps) : 0),
+        avgLogLossExtra: (steps > 0 ? (totalLogLossExtra / steps) : 0),
+        avgExpectedMassExtra: (steps > 0 ? (totalExpectedMassInPicksExtra / steps) : 0)
+      };
+      resolveAll(results);
+      return;
+    }
+
     var idx = backtestIndices[bi];
     var nums       = sortedDrawsAsc[idx].numbers;
     var actualMain = nums.slice(0, settings.PICK_SIZE);
@@ -3133,7 +3173,7 @@ async function runBacktesting(sortedDrawsAsc, settings) {
 
     // train & predict
     var trainingDraws = sortedDrawsAsc.slice(0, idx);
-    var model         = await trainModelForBacktest(trainingDraws, settings, updateBacktestProgress);
+    trainModelForBacktest(trainingDraws, settings, updateBacktestProgress).then(function(model) {
 
     // prepare last input (normalized numbers + Skip features)
     var drawsNumbersForBT   = trainingDraws.map(function(d) { return d.numbers; });
@@ -3162,9 +3202,9 @@ async function runBacktesting(sortedDrawsAsc, settings) {
     );
 
     // Build full blended mass for proper scoring (main)
-    var actualMainSet = new Set(actualMain);
+    var actualMainSet = skaiMakeSet(actualMain);
 
-    var aiRawMain = Array.from(mainArr).map(function(v) {
+    var aiRawMain = skaiArrayFrom(mainArr).map(function(v) {
       var p = (typeof v === 'number' && isFinite(v)) ? v : 0;
       return Math.min(1 - SKAI_EPS, Math.max(SKAI_EPS, p));
     });
@@ -3172,9 +3212,9 @@ async function runBacktesting(sortedDrawsAsc, settings) {
 
     var skipArrMain = Array.isArray(skipScoresForBacktest)
       ? skipScoresForBacktest
-      : new Array(aiNormMain.length).fill(0);
+      : skaiArrayFill(aiNormMain.length, 0);
 
-    // Mode-aware skip expert + adaptive Mixed λ (agreement-based)
+    // Mode-aware skip expert + adaptive Mixed lambda (agreement-based)
     var modeKeyBT = getSelectedSkaiMode();
 
     var skipBetaBT = getSkaiSkipBeta(modeKeyBT);
@@ -3182,7 +3222,7 @@ async function runBacktesting(sortedDrawsAsc, settings) {
 
     var lambdaBT = getSkaiLambda(modeKeyBT, aiNormMain, skipProbMain);
 
-    // PATCH 7B-3B: backtest readout (shows the λ being used for this run)
+    // PATCH 7B-3B: backtest readout (shows the lambda being used for this run)
     var tBT = (typeof skaiGetStoredTemp === 'function') ? skaiGetStoredTemp(modeKeyBT) : 1.0;
     skaiUpdateBlendReadout(modeKeyBT, lambdaBT, skipBetaBT, tBT);
 
@@ -3213,22 +3253,22 @@ async function runBacktesting(sortedDrawsAsc, settings) {
 
     var mainMatch=0;
     var predictedMain = mainProbs.map(function(x) {
-      if (actualMain.includes(x.number)) { mainMatch++; return '[[span class="match"]]' + x.number + '[[/span]]'; }
+      if (actualMain.indexOf(x.number) !== -1) { mainMatch++; return '[[span class="match"]]' + x.number + '[[/span]]'; }
       return x.number;
     });
     // top-extras
     var predictedExtra = [], extraMatch=0;
     if (settings.HAS_EXTRA) {
-      var actualExtraSet = new Set(actualExtra);
+      var actualExtraSet = skaiMakeSet(actualExtra);
 
       // Build full normalized mass for extra
-      var aiRawExtra = Array.from(extraArr).map(function(v) {
+      var aiRawExtra = skaiArrayFrom(extraArr).map(function(v) {
         var p = (typeof v === 'number' && isFinite(v)) ? v : 0;
         return Math.min(1 - SKAI_EPS, Math.max(SKAI_EPS, p));
       });
       var probMassExtraNorm = normalizePositive(aiRawExtra);
 
-      var extraProbs = Array.from(extraArr)
+      var extraProbs = skaiArrayFrom(extraArr)
         .map(function(p,i) { return { number: i+1, prob: p }; })
         .sort(function(a,b) { return b.prob-a.prob; })
         .slice(0, settings.EXTRA_SUGGESTIONS);
@@ -3241,7 +3281,7 @@ async function runBacktesting(sortedDrawsAsc, settings) {
       totalLogLossExtra += skaiLogLoss(probMassExtraNorm, actualExtraSet, settings.EXTRA_MAX);
       totalExpectedMassInPicksExtra += skaiExpectedMassInPicks(probMassExtraNorm, extraPicks);
       predictedExtra = extraProbs.map(function(x) {
-        if (actualExtra.includes(x.number)) { extraMatch++; return '[[span class="match"]]' + x.number + '[[/span]]'; }
+        if (actualExtra.indexOf(x.number) !== -1) { extraMatch++; return '[[span class="match"]]' + x.number + '[[/span]]'; }
         return x.number;
       });
     }
@@ -3255,28 +3295,24 @@ async function runBacktesting(sortedDrawsAsc, settings) {
       mainMatchCount:   mainMatch,
       extraMatchCount:  extraMatch
     });
+      // Continue with next step (recursive ES5-safe chain)
+      processBacktestStep(bi + 1);
+    }).catch(rejectAll);
+  } // end processBacktestStep
+
+  // Start the recursive chain
+  try {
+    processBacktestStep(0);
+  } catch (e) {
+    rejectAll(e);
   }
-
-  // Attach a compact scoring summary for rendering
-  var steps = results.length || 1;
-  results.skaiSummary = {
-    steps: steps,
-    avgBrierMain: (totalBrierMain / steps),
-    avgLogLossMain: (totalLogLossMain / steps),
-    avgExpectedMassMain: (totalExpectedMassInPicksMain / steps),
-
-    avgBrierExtra: (steps > 0 ? (totalBrierExtra / steps) : 0),
-    avgLogLossExtra: (steps > 0 ? (totalLogLossExtra / steps) : 0),
-    avgExpectedMassExtra: (steps > 0 ? (totalExpectedMassInPicksExtra / steps) : 0)
-  };
-
-  return results;
+  }); // end new Promise
 }
 // --- END FIXED BACKTEST FUNCTIONS ---
 
 
       
-      startButton.addEventListener('click', async function startAnalysis(event) {
+      startButton.addEventListener('click', function startAnalysis(event) {
        // Scroll the loading container into center view on start
 setTimeout(function() {
   var loadingEl = document.getElementById('loading');
@@ -3376,9 +3412,8 @@ setTimeout(function() {
           funMessageDiv.innerText = funMessages[funMessageIndex];
         }, funMessageInterval);
         countdownDiv.innerHTML = "Estimated time: Calculating...";
-        try {
-          try { window.dispatchEvent(new Event('skai:ml:start')); } catch (_) {}
-          await tf.setBackend('cpu');
+        try { window.dispatchEvent(new Event('skai:ml:start')); } catch (_) {}
+        tf.setBackend('cpu').then(function() {
           console.log('TensorFlow.js version:', tf.version.tfjs);
           console.log('Backend:', tf.getBackend());
           progressMessage.innerText = messages[0];
@@ -3402,7 +3437,7 @@ setTimeout(function() {
 
           // Y: main multi-hot
           var mainNumbers = nextDraw.slice(0, pickSize);
-          var mainNumbersVector = new Array(mainNumbersMax).fill(0);
+          var mainNumbersVector = skaiArrayFill(mainNumbersMax, 0);
           mainNumbers.forEach(function(num) {
             if (num >= 1 && num <= mainNumbersMax) {
               mainNumbersVector[num - 1] = 1;
@@ -3413,7 +3448,7 @@ setTimeout(function() {
           var extraVector = null;
           if (hasExtraBall) {
             var extraNumber = nextDraw[pickSize];
-            extraVector = new Array(extraBallMax).fill(0);
+            extraVector = skaiArrayFill(extraBallMax, 0);
             if (extraNumber >= 1 && extraNumber <= extraBallMax) {
               extraVector[extraNumber - 1] = 1;
             }
@@ -3529,8 +3564,7 @@ setTimeout(function() {
 
           // PATCH: training must run before predict; otherwise results are random + instant
           progressMessage.innerText = messages[3];
-          await model.fit(xsTensor, yTrain, fitArgs);
-
+          return model.fit(xsTensor, yTrain, fitArgs).then(function() {
           progressMessage.innerText = messages[6];
 
           // Build prediction input: normalized latest draw + its Skip feature vector
@@ -3557,7 +3591,7 @@ setTimeout(function() {
           var modeKey = getSelectedSkaiMode();
 
           // 1) AI marginals → normalized mass
-          var aiRaw = Array.from(mainNumbersPrediction).map(function(v) {
+          var aiRaw = skaiArrayFrom(mainNumbersPrediction).map(function(v) {
             var p = (typeof v === 'number' && isFinite(v)) ? v : 0;
             return Math.min(1 - SKAI_EPS, Math.max(SKAI_EPS, p));
           });
@@ -3566,7 +3600,7 @@ setTimeout(function() {
           // 2) Skip scores → skip-expert distribution
           var skipArr = Array.isArray(skipScores)
             ? skipScores
-            : new Array(aiNorm.length).fill(0);
+            : skaiArrayFill(aiNorm.length, 0);
 
           var skipBetaLocal = getSkaiSkipBeta(modeKey);
           var skipProbLocal = buildSkipExpertProbs(skipArr, skipBetaLocal);
@@ -3610,9 +3644,9 @@ setTimeout(function() {
           var pickedNumbers = skaiSelectPicksFromMass(finalProbNorm, pickSize, modeKey);
 
           // Map pickedNumbers back to objects (for display wiring that expects {number,...})
-          var pickedSet = new Set(pickedNumbers);
+          var pickedSet = skaiMakeSet(pickedNumbers);
           var predictedMainNumbers = mainNumbersProbabilities
-            .filter(function(item) { return pickedSet.has(item.number); })
+            .filter(function(item) { return skaiSetHas(pickedSet, item.number); })
             .sort(function(a, b) { return a.number - b.number; });
           var numbersHTML = '';
       
@@ -3645,7 +3679,7 @@ setTimeout(function() {
           });
           breakdownHTML += '[[/tbody]][[/table]]';
           if (hasExtraBall) {
-            var extraProbabilities = Array.from(extraPrediction)
+            var extraProbabilities = skaiArrayFrom(extraPrediction)
               .map(function(prob, index) { return { number: index + 1, probability: prob }; });
             extraProbabilities.sort(function(a, b) { return b.probability - a.probability; });
             breakdownHTML +=
@@ -3722,7 +3756,7 @@ document.getElementById('saveHiddenLayers').value        = HIDDEN_LAYERS;
           // For the EXTRA ball predictions, if applicable, compute the entire sorted list
           var extraPredictionNumbers = "";
           if (hasExtraBall) {
-            var extraProbabilities = Array.from(extraPrediction).map(function(prob, index) { return { number: index + 1, probability: prob }; });
+            var extraProbabilities = skaiArrayFrom(extraPrediction).map(function(prob, index) { return { number: index + 1, probability: prob }; });
             extraProbabilities.sort(function(a, b) { return b.probability - a.probability; });
            extraPredictionNumbers = extraProbabilities
   .slice(0, 5)
@@ -3748,51 +3782,49 @@ document.getElementById('saveHiddenLayers').value        = HIDDEN_LAYERS;
             countdownDiv.innerHTML = "Running backtesting on previous draws...";
       
             var sortedDrawsAsc = filteredDraws.slice().sort(function(a, b) { return new Date(a.draw_date) - new Date(b.draw_date); });
- var settings = {
-  EPOCHS: EPOCHS,
-  BATCH_SIZE: BATCH_SIZE,
-  DROPOUT_RATE: DROPOUT_RATE,
-  LEARNING_RATE: LEARNING_RATE,
-  ACTIVATION_FUNCTION: ACTIVATION_FUNCTION,
-  HIDDEN_LAYERS: HIDDEN_LAYERS,
-
-  // new entries so trainModelForBacktest() and runBacktesting() see them:
-  RECENCY_DECAY:   recencyDecay,
-  PICK_SIZE:       pickSize,
-  MAIN_MAX:        mainNumbersMax,
-  EXTRA_COUNT:     numExtraBalls,
-  EXTRA_MAX:       extraBallMax,
-  HAS_EXTRA:       hasExtraBall,
-  EXTRA_SUGGESTIONS: topExtraSuggestions
-};
-
-var backtestResults = await runBacktesting(sortedDrawsAsc, settings);
-
-            var backtestHTML = renderBacktestResults(backtestResults);
-            backtestResultsDiv.innerHTML = backtestHTML;
-            backtestResultsDiv.style.display = 'block';
-            
-            // Update backtesting notice and hide the progress bar now that backtesting is complete
-            backtestNoticeDiv.innerHTML = "[[h4]]Backtesting Complete[[/h4]][[p]]Backtesting has finished processing all draws.[[/p]]";
-            backtestProgressContainer.style.display = 'none';
-      
-            // ✅ Update message to show final completion
-            countdownDiv.innerHTML = "Done! Analysis is complete.";
-      
+            var settings = {
+              EPOCHS: EPOCHS,
+              BATCH_SIZE: BATCH_SIZE,
+              DROPOUT_RATE: DROPOUT_RATE,
+              LEARNING_RATE: LEARNING_RATE,
+              ACTIVATION_FUNCTION: ACTIVATION_FUNCTION,
+              HIDDEN_LAYERS: HIDDEN_LAYERS,
+              RECENCY_DECAY:   recencyDecay,
+              PICK_SIZE:       pickSize,
+              MAIN_MAX:        mainNumbersMax,
+              EXTRA_COUNT:     numExtraBalls,
+              EXTRA_MAX:       extraBallMax,
+              HAS_EXTRA:       hasExtraBall,
+              EXTRA_SUGGESTIONS: topExtraSuggestions
+            };
+            // ES5-safe: return the Promise so the outer chain waits for backtest to finish
+            return runBacktesting(sortedDrawsAsc, settings).then(function(backtestResults) {
+              var backtestHTML = renderBacktestResults(backtestResults);
+              backtestResultsDiv.innerHTML = backtestHTML;
+              backtestResultsDiv.style.display = 'block';
+              backtestNoticeDiv.innerHTML = "[[h4]]Backtesting Complete[[/h4]][[p]]Backtesting has finished processing all draws.[[/p]]";
+              backtestProgressContainer.style.display = 'none';
+              countdownDiv.innerHTML = "Done! Analysis is complete.";
+            });
           }
           // END BACKTESTING STEP
-          setTimeout(function() {
-            loadingDiv.style.display = 'none';
-            predictionDiv.style.display = 'block';
-            numberBreakdownDiv.style.display = 'block';
-          }, 1000);
-          clearInterval(funMessageTimer);
-          try { window.dispatchEvent(new Event('skai:done')); } catch (_) {}
-        } catch (error) {
-          console.error('Error during model training or Analysis:', error);
-          loadingDiv.innerText = 'An error occurred during model training or Analysis: ' + error.message;
-          startButton.style.display = 'block';
-        }
+          return null; // no backtest - signal success to outer .then()
+        }); // end model.fit().then()
+      }).then(function() {
+        // Final cleanup runs after tf.setBackend + model.fit (+ optional backtest) all complete
+        setTimeout(function() {
+          loadingDiv.style.display = 'none';
+          predictionDiv.style.display = 'block';
+          numberBreakdownDiv.style.display = 'block';
+        }, 1000);
+        clearInterval(funMessageTimer);
+        try { window.dispatchEvent(new Event('skai:done')); } catch (_) {}
+      }).catch(function(error) {
+        console.error('Error during model training or Analysis:', error);
+        loadingDiv.innerText = 'An error occurred during model training or Analysis: ' + error.message;
+        startButton.style.display = 'block';
+        clearInterval(funMessageTimer);
+      });
       });
     });
   [[/script]]
