@@ -1026,6 +1026,187 @@ button.button-reset:hover{
 
 
 
+
+/* ─── SKAI Guided UX: Page Orientation Block ─────────────────────── */
+.skai-orient {
+  background: var(--skai-gradient-primary);
+  border-radius: 14px;
+  padding: 22px 28px 20px;
+  margin: 0 0 24px 0;
+  color: #fff;
+  text-align: left;
+}
+.skai-orient h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 8px 0;
+  letter-spacing: 0.02em;
+}
+.skai-orient p {
+  font-size: 0.93rem;
+  line-height: 1.6;
+  margin: 0;
+  color: rgba(255,255,255,0.88);
+}
+.skai-orient .skai-orient-outcome {
+  display: inline-block;
+  margin-top: 12px;
+  background: rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 999px;
+  padding: 4px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.01em;
+}
+
+/* ─── SKAI Guided UX: 3-Step How-It-Works Card ───────────────────── */
+.skai-how-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 22px 0;
+  padding: 0;
+  list-style: none;
+}
+.skai-how-card li {
+  flex: 1;
+  min-width: 160px;
+  background: #fff;
+  border: 1px solid rgba(127,141,170,0.2);
+  border-radius: 12px;
+  padding: 16px 16px 14px;
+  text-align: left;
+  box-shadow: 0 4px 12px rgba(10,26,51,0.07);
+}
+.skai-how-card li .skai-step-num {
+  display: inline-block;
+  background: var(--skai-gradient-primary);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  border-radius: 999px;
+  padding: 2px 9px;
+  margin-bottom: 8px;
+}
+.skai-how-card li strong {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--skai-navy);
+  margin-bottom: 3px;
+}
+.skai-how-card li span {
+  font-size: 0.82rem;
+  color: var(--skai-slate);
+  line-height: 1.5;
+}
+
+/* ─── SKAI Guided UX: Inline Step Labels ─────────────────────────── */
+.skai-step-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 24px 0 10px 0;
+  padding: 0;
+}
+.skai-step-badge {
+  background: var(--skai-blue);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.skai-step-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--skai-navy);
+}
+.skai-step-hint {
+  font-size: 0.8rem;
+  color: var(--skai-slate);
+  margin-left: auto;
+}
+@media (max-width: 600px) {
+  .skai-step-hint { display: none; }
+  .skai-how-card li { min-width: 140px; }
+}
+
+/* ─── SKAI Guided UX: Persistent Help Strip ─────────────────────── */
+.skai-help-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: #f1f4fb;
+  border: 1px solid rgba(28,102,255,0.15);
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-size: 0.85rem;
+  color: var(--skai-navy);
+  margin: 22px 0 0 0;
+  flex-wrap: wrap;
+  text-align: center;
+}
+.skai-help-strip a {
+  color: var(--skai-blue);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.skai-help-strip a:hover { text-decoration: underline; }
+.skai-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--skai-blue);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ─── Improved backtesting card ──────────────────────────────────── */
+.skai-backtest-card {
+  background: #fff;
+  border: 1px solid rgba(127,141,170,0.22);
+  border-radius: 12px;
+  padding: 16px 18px;
+  max-width: 640px;
+  margin: 0 auto;
+  text-align: left;
+}
+.skai-backtest-card h4 {
+  margin: 0 0 6px 0;
+  font-size: 0.95rem;
+  color: var(--skai-navy);
+}
+.skai-backtest-card p {
+  margin: 0 0 10px 0;
+  font-size: 0.85rem;
+  color: var(--skai-slate);
+  line-height: 1.55;
+}
+
+/* ─── Improved mode button subtext ───────────────────────────────── */
+.skai-mode-btn > span:last-child {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 400;
+  margin-top: 2px;
+  line-height: 1.4;
+  opacity: 0.82;
+}
+
 [[/style]]
 [[script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js" defer]][[/script]]
 [[script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer]][[/script]]
@@ -1045,9 +1226,42 @@ button.button-reset:hover{
   Review how the model performed on past draws, see your numbers ranked by probability,
   and decide how to play with more clarity and control.
 [[/p]]
-   
+
+  <!-- SKAI Page Orientation: What is this page + how it works -->
+  [[div class="skai-orient"]]
+    [[h2]]What You Can Do Here[[/h2]]
+    [[p]]Use the LottoExpert AI Engine to generate a ranked set of numbers for [[strong]]<?php echo htmlspecialchars($lotteryName, ENT_QUOTES, 'UTF-8'); ?>[[/strong]]. The engine analyses every past draw, builds a probability model, and returns your top picks — ranked by likelihood.[[/p]]
+    [[span class="skai-orient-outcome"]]Your outcome: a probability-ranked list of numbers, ready to play or save[[/span]]
+  [[/div]]
+
+  <!-- SKAI "How This Page Works" 3-step guide -->
+  [[ul class="skai-how-card" id="skai-page-guide" aria-label="How to use this page"]]
+    [[li]]
+      [[span class="skai-step-num"]]STEP 1[[/span]]
+      [[strong]]Configure (optional)[[/strong]]
+      [[span]]Choose a strategy mode and optionally adjust settings below.[[/span]]
+    [[/li]]
+    [[li]]
+      [[span class="skai-step-num"]]STEP 2[[/span]]
+      [[strong]]Run the analysis[[/strong]]
+      [[span]]Click [[em]]Start Analysis[[/em]]. The AI engine processes past draws and ranks every number by probability.[[/span]]
+    [[/li]]
+    [[li]]
+      [[span class="skai-step-num"]]STEP 3[[/span]]
+      [[strong]]Review and save[[/strong]]
+      [[span]]See your ranked number list and save your picks to your dashboard.[[/span]]
+    [[/li]]
+  [[/ul]]
+
     <!-- Start Analysis Buttons -->
     <?php if ($userIsInAllowedGroup): ?>
+      <!-- SKAI Guided UX: CTA context label -->
+      [[div class="skai-step-label"]]
+        [[span class="skai-step-badge" style="background:var(--skai-success);"]]START[[/span]]
+        [[span class="skai-step-title"]]Run the Analysis when ready[[/span]]
+        [[span class="skai-step-hint"]]Configure strategy and settings below first[[/span]]
+      [[/div]]
+
       [[div style="text-align: center; margin-top: 20px;"]]
 [[button id="startPrediction" type="button"
    style="
@@ -1336,11 +1550,10 @@ document.addEventListener('DOMContentLoaded', function () {
     <?php endif; ?>
     
     <!-- Advanced Backtesting Section (moved below the Start Analysis buttons) -->
-    [[div style="margin: 20px auto; padding: 10px; background: #f9f9f9; color: #333; border-radius: 5px; width: 60%; border: 1px solid #ddd; text-align: left; font-size: 14px;"]]
+    [[div class="skai-backtest-card" style="margin: 20px auto;"]]
       [[h4]]Backtesting (Optional)[[/h4]]
       [[p]]
-        Optionally enable backtesting to evaluate how your chosen settings would have performed on past draws. 
-        This feature helps you analyze historical trends and refine your strategy without affecting your current analysis.
+        Run your chosen settings against recent past draws to see how the model would have performed. This does not affect your main analysis.
       [[/p]]
       [[label for="enableBacktest"]]
         [[input type="checkbox" id="enableBacktest" name="enableBacktest" style="margin-right: 8px;" /]]
@@ -1358,8 +1571,15 @@ document.addEventListener('DOMContentLoaded', function () {
 [[/label]]
     [[/div]]
     
-    [[p]]Click "Start Analysis" to begin, or adjust the advanced settings below to customize your experience.[[/p]]
-    [[p]]Analyzing from [[strong]]<?php echo $totalEntryCount; ?>[[/strong]] total database entries...[[/p]]
+    [[p style="color:var(--skai-slate); font-size:0.88rem; margin-bottom:4px;"]]Choose a strategy mode, then click [[strong]]Start Analysis[[/strong]]. Advanced settings are optional — the defaults work well for most players.[[/p]]
+    [[p style="font-size:0.83rem; color:var(--skai-slate); margin-bottom:0;"]]Analyzing [[strong]]<?php echo $totalEntryCount; ?>[[/strong]] historical draw records for <?php echo htmlspecialchars($lotteryName, ENT_QUOTES, 'UTF-8'); ?>.[[/p]]
+
+    <!-- SKAI Guided UX: Step 1 label -->
+    [[div class="skai-step-label"]]
+      [[span class="skai-step-badge"]]STEP 1[[/span]]
+      [[span class="skai-step-title"]]Choose Your Analysis Strategy[[/span]]
+      [[span class="skai-step-hint"]]Not sure? Start with Balanced.[[/span]]
+    [[/div]]
 
     <!-- SKAI Mode Presets (Balanced / Explorative / Conservative + SKAI Blend Modes) -->
     [[div class="skai-mode-strip" role="radiogroup" aria-label="Choose how the LottoExpert AI Engine should analyze this game"]]
@@ -1487,6 +1707,13 @@ document.addEventListener('DOMContentLoaded', function () {
         [[h4 style="margin-top: 10px;"]]What is Overfitting?[[/h4]]
         [[p]]Overfitting happens when the model memorizes the training data rather than learning general patterns. Using dropout and proper tuning helps prevent this.[[/p]]
       [[/details]]
+    [[/div]]
+
+    <!-- SKAI Guided UX: Step 2 label -->
+    [[div class="skai-step-label"]]
+      [[span class="skai-step-badge" style="background:var(--skai-slate);"]]OPTIONAL[[/span]]
+      [[span class="skai-step-title"]]Fine-tune AI Parameters[[/span]]
+      [[span class="skai-step-hint"]]Skip this if you are new.[[/span]]
     [[/div]]
 
     [[div class="custom-container"]]
@@ -1619,18 +1846,18 @@ document.addEventListener('DOMContentLoaded', function () {
     [[/div]]
     
     [[div id="prediction" style="display: none;"]]
-      [[h3]]Predicted Numbers[[/h3]]
+      [[h3]]Your Predicted Numbers[[/h3]]
       [[div id="predictedNumbers"]][[/div]]
     [[/div]]
     
     [[div class="breakdown-section" id="numberBreakdown" style="display: none;"]]
-      [[h3]]Most Likely Number Breakdown[[/h3]]
+      [[h3]]Number Probability Ranking[[/h3]]
       [[div id="numberBreakdownTable"]][[/div]]
     [[/div]]
     
     [[div id="backtestNotice" style="display: none; background: #ffffff; color: #000; padding: 15px; border-radius: 5px; margin-top: 20px; border: 1px solid #ccc;"]]
-      [[h4]]Backtesting in Progress[[/h4]]
-      [[p]]The system is now running a backtest on the completed draws using your selected settings. Please note that this process could take several minutes.[[/p]]
+      [[h4]]Backtesting in Progress...[[/h4]]
+      [[p]]The model is checking how well your chosen settings predict past draws. This typically takes 1 to 3 minutes. Your main results are already ready above.[[/p]]
     [[/div]]
     [[div id="backtestProgressContainer" style="display: none; margin-top: 10px;"]]
       [[div id="backtestProgressBar" class="progress-bar"]]0%[[/div]]
@@ -1638,9 +1865,17 @@ document.addEventListener('DOMContentLoaded', function () {
     [[div id="backtestResults" style="display: none; margin-top: 20px;"]][[/div]]
     
     
+      <!-- SKAI Guided UX: Step 4 label - Review and Save -->
+      [[div class="skai-step-label" id="skai-step4-label"]]
+        [[span class="skai-step-badge"]]STEP 3[[/span]]
+        [[span class="skai-step-title"]]Review Your Numbers and Save[[/span]]
+        [[span class="skai-step-hint"]]Your analysis is complete[[/span]]
+      [[/div]]
+
       <!-- SAVE PREDICTION SET FORM (Place this after your main analysis container) -->
-[[div id="saveFormContainer" style="background-color:#fff; border:1px solid #ccc; border-radius:10px; padding:10px 15px; font-size:13px; max-width:500px; margin:20px auto; text-align:center;"]]
-    [[h4 style="margin-bottom:10px; font-size:15px; font-weight:bold;"]]Save This Prediction Set[[/h4]]
+[[div id="saveFormContainer" style="background-color:#fff; border:1px solid rgba(127,141,170,0.25); border-radius:14px; padding:20px 24px; font-size:13px; max-width:500px; margin:20px auto; text-align:center; box-shadow:0 4px 16px rgba(10,26,51,0.08);"]]
+    [[h4 style="margin-bottom:6px; font-size:16px; font-weight:700; color:var(--skai-navy);"]]Save Your Prediction[[/h4]]
+    [[p style="font-size:0.8rem; color:var(--skai-slate); margin:0 0 12px 0;"]]Give it a label and save it to your LottoExpert dashboard.[[/p]]
     [[form method="post" id="savePredictionForm" style="margin:0 auto;"]]
       <?php echo JHtml::_('form.token'); ?>
       [[input type="hidden" name="source" value="ai_prediction"]]
@@ -1665,7 +1900,7 @@ document.addEventListener('DOMContentLoaded', function () {
 [[input type="text" name="label" id="saveLabel" value="<?php echo htmlspecialchars($labelText); ?>" style="width:100%;"]]
 
       <?php if ($userCanSave): ?>
-        [[button type="submit" name="save_set" style="margin-top:10px; padding:7px 15px; background-color:#007bff; color:#fff; border:none; border-radius:5px; font-weight:bold; font-size:13px;"]]
+        [[button type="submit" name="save_set" style="margin-top:10px; padding:10px 22px; background-color:var(--skai-blue); color:#fff; border:none; border-radius:999px; font-weight:700; font-size:14px; cursor:pointer;"]]
           Save to My LottoExpert
         [[/button]]
       <?php else: ?>
@@ -1681,6 +1916,14 @@ document.addEventListener('DOMContentLoaded', function () {
       <?php endif; ?>
     [[/form]]
 [[/div]]
+
+  <!-- SKAI Persistent Help Strip -->
+  [[div class="skai-help-strip"]]
+    [[span class="skai-help-icon"]]?[[/span]]
+    [[span]]Not sure how to use this page?[[/span]]
+    [[a href="#skai-how-it-works" onclick="document.getElementById('skai-how-it-works').open=true; return true;"]]View the How It Works guide[[/a]]
+  [[/div]]
+
     
     
     
