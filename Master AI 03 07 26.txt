@@ -2998,10 +2998,13 @@ function getSkaiExploreTau(modeKey) {
 }
 
 // How many picks should be “explore sampled” instead of strict top-k.
+// All modes get at least 1 explore pick to prevent identical outputs across batch runs.
 function getSkaiExploreCount(modeKey, pickSize) {
-  if (modeKey === 'explorative') { return Math.max(1, Math.floor(pickSize * 0.30)); }
-  if (modeKey === 'mixed')       { return Math.max(1, Math.floor(pickSize * 0.20)); }
-  return 0;
+  if (modeKey === 'explorative')   { return Math.max(1, Math.floor(pickSize * 0.40)); }
+  if (modeKey === 'mixed')         { return Math.max(1, Math.floor(pickSize * 0.30)); }
+  if (modeKey === 'skip-dominant') { return Math.max(1, Math.floor(pickSize * 0.20)); }
+  // All other modes (ai-forward, balanced, conservative): 1 exploration pick minimum
+  return 1;
 }
 
 // Build a tempered mass (flattened) for sampling: p^(1/τ), normalized.
@@ -3656,7 +3659,12 @@ setTimeout(function() {
         }, funMessageInterval);
         countdownDiv.innerHTML = "Estimated time: Calculating...";
         try { window.dispatchEvent(new Event('skai:ml:start')); } catch (_) {}
-        tf.setBackend('cpu').then(function() {
+        // Single-threaded JS guarantees no concurrency; skip re-init if already on CPU
+        // to avoid resetting TensorFlow.js internal PRNG state between batch runs.
+        var backendReady = (typeof tf.getBackend === 'function' && tf.getBackend() === 'cpu')
+          ? Promise.resolve()
+          : tf.setBackend('cpu');
+        backendReady.then(function() {
           console.log('TensorFlow.js version:', tf.version.tfjs);
           console.log('Backend:', tf.getBackend());
           progressMessage.innerText = messages[0];
@@ -3697,8 +3705,13 @@ setTimeout(function() {
             }
           }
 
-          // Replication factor (Medium recency)
-          var reps = (i >= recentStart) ? 3 : 1;
+          // Replication factor: driven by recencyDecay (set by profile preset).
+          // Thresholds are chosen to bracket the three standard profile values:
+          //   explorative ~0.85 (below 0.88) → 5x  (heavy recent-draw weighting)
+          //   balanced    ~0.94 (below 0.95) → 3x  (moderate recent-draw weighting)
+          //   conservative ~0.97 (above 0.95) → 2x  (near-uniform weighting)
+          var recentReps = (recencyDecay <= 0.88) ? 5 : (recencyDecay <= 0.95) ? 3 : 2;
+          var reps = (i >= recentStart) ? recentReps : 1;
 
           for (var r = 0; r < reps; r++) {
             xs.push(inputVector);
@@ -3904,8 +3917,9 @@ setTimeout(function() {
               numbersHTML += '[[span class="number-ball powerball"]]' + extraBall.number + '[[/span]]\n';
           }
       
-          predictedNumbersDiv.style.display = "none";
-      
+          predictedNumbersDiv.innerHTML = numbersHTML;
+          predictedNumbersDiv.style.display = "block";
+
           var breakdownHTML =
             '[[h3]]Top 20 Main Numbers Breakdown[[/h3]]' +
             '[[table]][[thead]][[tr]]' +
@@ -4061,6 +4075,7 @@ document.getElementById('saveHiddenLayers').value        = HIDDEN_LAYERS;
           numberBreakdownDiv.style.display = 'block';
         }, 1000);
         clearInterval(funMessageTimer);
+        startButton.style.display = 'block';
         try { window.dispatchEvent(new Event('skai:done')); } catch (_) {}
       }).catch(function(error) {
         console.error('Error during model training or Analysis:', error);
@@ -4625,6 +4640,16 @@ document.addEventListener('DOMContentLoaded', function () {
         if (mainField) { mainField.value = r.mainNumbers.join(","); }
         var extraField = document.getElementById("saveExtraBallNumbers");
         if (extraField) { extraField.value = (r.extraNumbers || []).join(","); }
+      }
+      /* Update label to include combo name so each save is distinct */
+      var LABEL_DELIMITER = " | ";
+      var labelField = document.getElementById("saveLabel");
+      if (labelField && r.combo && r.combo.label) {
+        var baseLbl = labelField.value || "Prediction";
+        /* Strip any previous combo suffix (format: "... | Combo Name") */
+        var pipeIdx = baseLbl.indexOf(LABEL_DELIMITER);
+        if (pipeIdx >= 0) { baseLbl = baseLbl.substring(0, pipeIdx); }
+        labelField.value = baseLbl + LABEL_DELIMITER + r.combo.label;
       }
     } catch (_) {}
 
