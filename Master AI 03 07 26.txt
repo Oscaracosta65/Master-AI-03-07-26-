@@ -806,6 +806,30 @@ button.button-reset:hover{
   box-shadow: 0px 4px 12px rgba(10,26,51,0.25);
 }
 
+/* Ranked number-ball wrapper: rank label above + number ball below */
+.skai-rank-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 4px 3px;
+}
+.skai-rank-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6b7280;
+  line-height: 1;
+  margin-bottom: 2px;
+  letter-spacing: 0.03em;
+}
+.skai-rank-wrap .number-ball {
+  margin: 0;
+  width: 52px;
+  height: 52px;
+  line-height: 52px;
+  font-size: 18px;
+  flex: 0 0 52px;
+}
+
 /* Highlighting for matching numbers in backtesting */
 .match {
   background-color: var(--skai-amber);
@@ -1846,7 +1870,7 @@ document.addEventListener('DOMContentLoaded', function () {
     [[/div]]
     
     [[div id="prediction" style="display: none;"]]
-      [[h3]]Your Predicted Numbers[[/h3]]
+      [[h3]]Top 20 Numbers by Likelihood[[/h3]]
       [[div id="predictedNumbers"]][[/div]]
     [[/div]]
     
@@ -3904,19 +3928,33 @@ setTimeout(function() {
           var predictedMainNumbers = mainNumbersProbabilities
             .filter(function(item) { return skaiSetHas(pickedSet, item.number); })
             .sort(function(a, b) { return a.number - b.number; });
+          // Display top 20 numbers in order of likelihood (highest probability first)
           var numbersHTML = '';
-      
-          // Add main numbers
-          predictedMainNumbers.slice(0, pickSize).forEach(function(item) {
-              numbersHTML += '[[span class="number-ball"]]' + item.number + '[[/span]]\n';
-          });
-      
-          // Add extra ball if available
-          if (hasExtraBall && predictedMainNumbers.length > pickSize) {
-              var extraBall = predictedMainNumbers[pickSize]; // The extra ball
-              numbersHTML += '[[span class="number-ball powerball"]]' + extraBall.number + '[[/span]]\n';
+          var top20Nums = mainNumbersProbabilities.slice(0, 20);
+          for (var rankIdx = 0; rankIdx < top20Nums.length; rankIdx++) {
+            var rankItem = top20Nums[rankIdx];
+            numbersHTML +=
+              '[[span class="skai-rank-wrap"]]' +
+              '[[span class="skai-rank-label"]]#' + (rankIdx + 1) + '[[/span]]' +
+              '[[span class="number-ball"]]' + rankItem.number + '[[/span]]' +
+              '[[/span]]\n';
           }
-      
+
+          // For hasExtraBall games, show the #1 extra ball from the separate model output.
+          // extraSorted is computed once per prediction render (small array, O(n log n) is negligible).
+          if (hasExtraBall && extraPrediction) {
+            var extraSorted = skaiArrayFrom(extraPrediction)
+              .map(function(prob, eIdx) { return { number: eIdx + 1, probability: prob }; });
+            extraSorted.sort(function(a, b) { return b.probability - a.probability; });
+            if (extraSorted.length > 0) {
+              numbersHTML +=
+                '[[span class="skai-rank-wrap"]]' +
+                '[[span class="skai-rank-label"]]Extra[[/span]]' +
+                '[[span class="number-ball powerball"]]' + extraSorted[0].number + '[[/span]]' +
+                '[[/span]]\n';
+            }
+          }
+
           predictedNumbersDiv.innerHTML = numbersHTML;
           predictedNumbersDiv.style.display = "block";
 
