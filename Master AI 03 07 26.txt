@@ -830,6 +830,19 @@ button.button-reset:hover{
   flex: 0 0 52px;
 }
 
+/* Extra ball section divider */
+.skai-extra-divider {
+  display: block;
+  width: 100%;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--skai-blue);
+  letter-spacing: 0.08em;
+  margin: 8px 0 4px;
+  opacity: 0.75;
+}
+
 /* Highlighting for matching numbers in backtesting */
 .match {
   background-color: var(--skai-amber);
@@ -3940,18 +3953,22 @@ setTimeout(function() {
               '[[/span]]\n';
           }
 
-          // For hasExtraBall games, show the #1 extra ball from the separate model output.
+          // For hasExtraBall games, show top 5 extra balls in order of likelihood.
           // extraSorted is computed once per prediction render (small array, O(n log n) is negligible).
           if (hasExtraBall && extraPrediction) {
             var extraSorted = skaiArrayFrom(extraPrediction)
               .map(function(prob, eIdx) { return { number: eIdx + 1, probability: prob }; });
             extraSorted.sort(function(a, b) { return b.probability - a.probability; });
-            if (extraSorted.length > 0) {
-              numbersHTML +=
-                '[[span class="skai-rank-wrap"]]' +
-                '[[span class="skai-rank-label"]]Extra[[/span]]' +
-                '[[span class="number-ball powerball"]]' + extraSorted[0].number + '[[/span]]' +
-                '[[/span]]\n';
+            var top5Extra = extraSorted.slice(0, 5);
+            if (top5Extra.length > 0) {
+              numbersHTML += '[[span class="skai-extra-divider"]]— Extra Ball —[[/span]]\n';
+              for (var eRankIdx = 0; eRankIdx < top5Extra.length; eRankIdx++) {
+                numbersHTML +=
+                  '[[span class="skai-rank-wrap"]]' +
+                  '[[span class="skai-rank-label"]]#' + (eRankIdx + 1) + '[[/span]]' +
+                  '[[span class="number-ball powerball"]]' + top5Extra[eRankIdx].number + '[[/span]]' +
+                  '[[/span]]\n';
+              }
             }
           }
 
