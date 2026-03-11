@@ -1,0 +1,4890 @@
+{source}
+<?php
+use Joomla\CMS\Uri\Uri;
+
+// Canonical tag (ensures correct indexing)
+$canonicalUrl = Uri::getInstance()->toString();
+echo '<link rel="canonical" href="' . htmlspecialchars($canonicalUrl) . '" />' . "\n";
+
+// Hreflang setup for generic English + fallback
+$pathWithQuery = Uri::getInstance()->toString(['path', 'query']);
+$href = 'https://lottoexpert.net' . $pathWithQuery;
+
+echo '<link rel="alternate" hreflang="en" href="' . $href . '" />' . "\n";
+echo '<link rel="alternate" hreflang="x-default" href="' . $href . '" />' . "\n";
+
+
+// PREVENT UNAUTHORIZED ACCESS ASAP
+defined('_JEXEC') or die('Restricted access');
+
+// Include Joomla authentication early
+include '../joomla-auth.php';
+
+// Define Joomla constants if not already set
+if (!defined('JPATH_BASE')) {
+    define('JPATH_BASE', realpath(dirname(__FILE__) . '/../..'));
+}
+if (!defined('_JEXEC')) {
+    define('_JEXEC', 1);
+}
+
+// Load Joomla Framework
+require_once JPATH_BASE . '/includes/defines.php';
+require_once JPATH_BASE . '/includes/framework.php';
+
+/**
+ * Single source of truth for the Lottery Game ID.
+ * Change this one value, and all lookups will use it.
+ */
+// ─── DETERMINE GAME ID ──────────────────────────────
+// Accept alphanumeric ID from URL; support multiple param names:
+// ?gameId=145 (current hub links), ?game_id=145 (legacy), ?gid=145 (alias). Default to '101'.
+$rawId =
+    (isset($_GET['gameId'])  ? trim((string) $_GET['gameId'])  : '') ?:
+    (isset($_GET['game_id']) ? trim((string) $_GET['game_id']) : '') ?:
+    (isset($_GET['gid'])     ? trim((string) $_GET['gid'])     : '');
+
+// Validate: only letters and digits allowed
+if ($rawId !== '' && preg_match('/^[A-Za-z0-9]+$/', $rawId)) {
+    $gameId = $rawId;
+} else {
+    $gameId = '101';
+}
+
+$app = JFactory::getApplication('site');
+$db  = JFactory::getDbo(); // ✅ Unified DB access
+
+// Get the current user BEFORE processing the save request
+$currUser   = JFactory::getUser();
+$userGroups = $currUser->groups ?? [];
+
+// Explicit fallback group if no specific rule exists for a game
+$defaultGroups = [14];
+
+// Explicit allowed groups per game (no merging, no auto-matching)
+$gameGroups = [
+    '101' => [10, 12, 13, 14],
+    '113' => [14],
+    '801' => [10, 12, 13, 14],
+    // Add more as needed…
+];
+
+// Pick the right list of allowed groups
+if (isset($gameGroups[$gameId])) {
+    $allowedGroups = $gameGroups[$gameId];
+} else {
+    $allowedGroups = $defaultGroups;
+}
+
+// Guest check: only allow if group 1 is in allowed groups
+if ($currUser->guest && in_array(1, $allowedGroups)) {
+    $userIsInAllowedGroup = true;
+} else {
+    $userIsInAllowedGroup = !empty(array_intersect($allowedGroups, $userGroups));
+}
+
+/**
+ * SAVE ENTITLEMENT GATE
+ * Enthusiast (group 10) can save ONLY on Powerball (gameId 101).
+ * Members (group 14) can save anywhere they are allowed to run analysis.
+ */
+$enthusiastGroupId = 10;   // Enthusiast plan
+$powerballGameId   = '101';
+
+$isEnthusiast = in_array($enthusiastGroupId, $userGroups, true);
+
+// Allow save only if analysis is allowed AND (not enthusiast OR Powerball)
+$userCanSave = $userIsInAllowedGroup && (!$isEnthusiast || (string)$gameId === $powerballGameId);
+
+/**
+ * Retrieve the next upcoming draw_date for a given lottery.
+ *
+ * @param   string $gameId     The lottery’s game ID (e.g. '101').
+ * @param   string $stateAbbr  Two‑letter lower‑cased state abbreviation (e.g. 'fl').
+ * @param   object $db         Joomla database object.
+ * @return  string|null        Next draw_date (YYYY‑MM‑DD) or null if none.
+ */
+
+// ─── LOAD LOTTERIES.JSON & DETERMINE tableName ───────────────────
+$specsFile = realpath('/home/oscara/web/lottoexpert.net/public_html/lotteries.json');
+if (!$specsFile || !is_readable($specsFile)) {
+    die('Lottery specs file not found or unreadable.');
+}
+$specsContent = file_get_contents($specsFile);
+$specsData = json_decode($specsContent, true);
+if (json_last_error() !== JSON_ERROR_NONE) {
+    die('Error parsing lotteries.json: ' . json_last_error_msg());
+}
+
+$foundSpec = null;
+foreach ($specsData['lotteries'] as $lot) {
+    if ((string)$lot['gameId'] === (string)$gameId) {
+        $foundSpec = $lot;
+        break;
+    }
+}
+if (!$foundSpec) {
+    die("Lottery spec for game ID $gameId not found in lotteries.json");
+}
+
+
+// THIS is the exact DB table from your JSON:
+$tableName = $foundSpec['tableName'];  // e.g. "#__lotterydb_pa"
+
+// ─── MULTI-STATE DISPLAY OVERRIDE ──────────────────────────────
+// Treat these game IDs as Multi-State for UI/SEO labels.
+$multiStateGameIds = ['101', '113', '132', '134', '135']; // add more as needed
+$isMultiState = in_array((string) $gameId, $multiStateGameIds, true);
+
+// Use this everywhere you would otherwise show $foundSpec['state']
+$stateLabel = $isMultiState ? 'Multi-State' : (string) ($foundSpec['state'] ?? 'Unknown');
+
+
+
+// ─── NEW getNextDrawDate() ─────────────────────────────────────
+// ─── NEW getNextDrawDate() ─────────────────────────────────────
+/**
+ * Retrieves the next non-blank next_draw_date, expanding #__ prefix.
+ * Returns DATETIME (adds ' 00:00:00' if the source is DATE-only).
+ */
+function getNextDrawDate($gameId, $db, $tableName) {
+    $tbl = $db->quoteName($db->replacePrefix($tableName));
+    $q   = $db->getQuery(true)
+        ->select($db->quoteName('next_draw_date'))
+        ->from($tbl)
+        ->where($db->quoteName('game_id') . ' = ' . $db->quote($gameId))
+        ->where($db->quoteName('next_draw_date') . ' IS NOT NULL')
+        ->where($db->quoteName('next_draw_date') . " <> " . $db->quote('0000-00-00'))
+        ->where($db->quoteName('next_draw_date') . " <> " . $db->quote('0000-00-00 00:00:00'))
+        ->order($db->quoteName('draw_date') . ' DESC')
+        ->setLimit(1);
+    $db->setQuery($q);
+    $val = $db->loadResult();
+
+    // Normalize DATE to DATETIME for inserts downstream
+    if (!empty($val) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $val)) {
+        $val .= ' 00:00:00';
+    }
+    return $val ?: null;
+}
+
+
+// PROCESS SAVE PREDICTION SET (Place after current user is loaded, before any HTML output)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && JSession::checkToken() && isset($_POST['save_set'])) {
+
+    // ── Prevent saving empty predictions ──
+    if (empty($_POST['main_numbers'])) {
+        $app->enqueueMessage('Please run the AI analysis before saving.', 'error');
+        $app->redirect($_SERVER['REQUEST_URI']);
+        exit;
+    }
+
+    $lottery   = filter_input(INPUT_POST, 'lottery_id',        FILTER_VALIDATE_INT);
+    $src       = $db->quote(strip_tags(trim($_POST['source'])));
+    $lbl       = $db->quote(strip_tags(trim($_POST['label'])));
+    $main      = $db->quote(strip_tags(trim($_POST['main_numbers'])));
+    $extra     = $db->quote(strip_tags(trim($_POST['extra_ball_numbers'])));
+    $count     = filter_input(INPUT_POST, 'draws_analyzed',   FILTER_VALIDATE_INT);
+    $gen       = $db->quote(strip_tags(trim($_POST['generated_at'])));
+    $saved     = $db->quote(date('Y-m-d H:i:s'));
+    $epochs    = (int)   $_POST['epochs'];
+    $batchSize = (int)   $_POST['batch_size'];
+    $dropout   = (float) $_POST['dropout_rate'];
+    $lr        = (float) $_POST['learning_rate'];
+    $actFunc   = $db->quote(strip_tags(trim($_POST['activation_function'])));
+    $layers    = (int)   $_POST['hidden_layers'];
+    $recencyDecay  = (float) $_POST['recency_decay'];
+
+
+    // → lookup the Joomla lottery PK by game_id (no state abbreviations)
+    $q = $db->getQuery(true)
+        ->select('l.game_id')
+        ->from( $db->quoteName('#__lotteries','l') )
+        ->where('l.lottery_id = ' . $lottery);
+    $db->setQuery($q);
+    $gameDbId = $db->loadResult();
+
+// → fetch next draw_date using our JSON-driven $tableName
+$nextDraw = getNextDrawDate($gameDbId, $db, $tableName);
+
+// Guard: fail clearly to avoid inserting 0000-00-00
+if (empty($nextDraw)) {
+    $app->enqueueMessage('Could not resolve next_draw_date for this game. Please confirm the draw table has it populated.', 'error');
+    $app->redirect($_SERVER['REQUEST_URI']);
+    exit;
+}
+
+// (removed redundant $query build)
+
+    // → build INSERT with next_draw_date column
+    $ins = $db->getQuery(true)
+        ->insert($db->quoteName('#__user_saved_numbers'))
+        ->columns([
+  'user_id','lottery_id','main_numbers','extra_ball_numbers',
+  'source','label','draws_analyzed','generated_at','date_saved',
+  'next_draw_date', 'epochs', 'batch_size', 'dropout_rate',
+  'learning_rate', 'activation_function', 'hidden_layers', 'recency_decay'
+])
+        ->values(
+  (int)$currUser->id . ", $lottery, $main, $extra, "
+  . "$src, $lbl, $count, $gen, $saved, "
+  . $db->quote($nextDraw) . ", $epochs, $batchSize, $dropout, $lr, $actFunc, $layers"
+  . ", $recencyDecay"
+);
+
+    try {
+        $db->setQuery($ins);
+        $db->execute();
+        $app->enqueueMessage('Number set saved successfully.');
+        $app->redirect('/my-dashboard');
+        exit;
+    } catch (Exception $e) {
+        $app->enqueueMessage('Error saving number set: ' . $e->getMessage(), 'error');
+    }
+}
+
+// — The rest of your file (re‑initialization, JSON config read, the full HTML/CSS/JS) stays exactly the same. — 
+// Paste the remainder of your original file here without changes.
+
+
+// Get the application instance
+$app = \JFactory::getApplication('site');
+
+
+// Prevent direct access to the file
+defined('_JEXEC') or die('Restricted access');
+
+// Path to the JSON settings file
+$configFile = '/home/oscara/web/lottoexpert.net/public_html/settings2.json';
+
+// Check if the file exists
+if (!file_exists($configFile)) {
+    die('Configuration file not found.');
+}
+
+// Read and decode the JSON configuration
+$configContent = file_get_contents($configFile);
+$config = json_decode($configContent, true);
+
+// Check for JSON parsing errors
+if (json_last_error() !== JSON_ERROR_NONE) {
+    die('Error parsing configuration file: ' . json_last_error_msg());
+}
+
+
+// Ensure the game ID exists in the configuration
+if (!isset($config[$gameId])) {
+    die("Game ID $gameId not found in the configuration.");
+}
+
+// Lookup the Joomla lotteries.lottery_id by that game_id so we pass the correct PK into our save handler
+
+$queryLottery = $db->getQuery(true)
+    ->select($db->quoteName('lottery_id'))
+    ->from($db->quoteName('#__lotteries'))
+    ->where($db->quoteName('game_id') . ' = ' . $db->quote($gameId));
+$db->setQuery($queryLottery);
+$lottery_id = (int)$db->loadResult();
+
+// Load the game‑specific settings
+$gameConfig        = $config[$gameId];
+$epochs            = $gameConfig['epochs']            ?? null;
+$batchSize         = $gameConfig['batchSize']         ?? null;
+$dropoutRate       = $gameConfig['dropoutRate']       ?? null;
+$learningRate      = $gameConfig['learningRate']      ?? null;
+$activationFunction= $gameConfig['activationFunction']?? null;
+$hiddenLayers      = $gameConfig['hiddenLayers']      ?? null;
+
+// Validate extracted parameters...
+if (!is_numeric($epochs) || $epochs <= 0) {
+    die('Invalid value for "epochs". Must be a positive number.');
+}
+if (!is_numeric($batchSize) || $batchSize <= 0) {
+    die('Invalid value for "batchSize". Must be a positive number.');
+}
+if (!is_numeric($dropoutRate) || $dropoutRate < 0 || $dropoutRate > 1) {
+    die('Invalid value for "dropoutRate". Must be between 0 and 1.');
+}
+if (!is_numeric($learningRate) || $learningRate <= 0) {
+    die('Invalid value for "learningRate". Must be greater than 0.');
+}
+if (!in_array($activationFunction, ['relu','sigmoid','tanh'], true)) {
+    die('Invalid value for "activationFunction".');
+}
+if (!is_numeric($hiddenLayers) || $hiddenLayers <= 0) {
+    die('Invalid value for "hiddenLayers". Must be a positive number.');
+}
+
+
+// Map the JSON fields into our variables
+$mainNumbersMax = (int) $foundSpec['rangeMain'];       // e.g. 70
+$pickSize       = (int) $foundSpec['pickSize'];        // e.g. 5 or 6
+$numExtraBalls  = (int) $foundSpec['extraBallCount'];   // 0, 1, or 2
+$hasExtraBall   = $numExtraBalls > 0;
+$extraBallMax   = $hasExtraBall
+                    ? (int) $foundSpec['rangeExtra']
+                    : 0;                               // e.g. 25
+
+// Derive a SKAI game type for presets (Option B – game-aware)
+$skaiGameType = 'jackpot'; // default
+
+// Very small-range daily games (e.g. Pick 3 / Pick 4)
+if ($pickSize <= 4 && $mainNumbersMax <= 10) {
+    $skaiGameType = 'daily';
+}
+// Classic Pick 5, no bonus ball
+elseif ($pickSize === 5 && !$hasExtraBall) {
+    $skaiGameType = 'pick5';
+}
+// Games with 2 or more extra balls (e.g. EuroMillions style)
+elseif ($hasExtraBall && $numExtraBalls >= 2) {
+    $skaiGameType = 'multiExtra';
+}
+// Otherwise, treat as jackpot-style (Powerball, Mega Millions, etc.)
+
+// ── HARD‑CODED COLUMN NAMES & SLICING ──
+
+// We’ve locked these in for security; we’ll only ever use the first $pickSize
+// (plus any extra balls) out of this master list:
+$allNumberFields = [
+  'first','second','third','fourth','fifth','sixth','seventh',
+  'eighth','nineth','tenth','eleventh','twelveth','thirtheenth',
+  'fourteenth','fifteenth','sixteenth','seventeenth','eighteenth',
+  'nineteenth','twentieth','twenty_first','twenty_second'
+];
+
+// pick the columns for the main draw:
+$mainFieldNames  = array_slice($allNumberFields, 0, $pickSize);
+
+// pick the columns for any extra‑ball(s) (will be empty if none):
+$extraFieldNames = $hasExtraBall
+    ? array_slice($allNumberFields, $pickSize, $numExtraBalls)
+    : [];
+// ── end HARD‑CODED COLUMN NAMES ──
+
+// (A) Helper to compute “n choose k”
+function combination($n, $k) {
+    if ($k > $n) return 0;
+    $res = 1;
+    for ($i = 1; $i <= $k; $i++) {
+        $res = $res * ($n - $i + 1) / $i;
+    }
+    return round($res);
+}
+
+// (B) Total ways to pick $pickSize from $mainNumbersMax
+$totalCombinations = combination($mainNumbersMax, $pickSize);
+
+// ── DYNAMIC BUCKETS BLOCK START ──
+
+// 1) grab any custom from GET/POST
+$custom = isset($_REQUEST['customCount']) ? (int) $_REQUEST['customCount'] : null;
+
+// 2) build the raw list: always include 1 ticket, stock buckets, and custom
+$raw = [
+  $pickSize,  // “1 ticket”
+  10, 15, 20, // stock buckets
+  $custom     // optional custom
+];
+
+// 3) filter invalid, dedupe & sort
+$options = array_values(array_unique(array_filter(
+    $raw,
+    function($n) use($pickSize, $mainNumbersMax) {
+        return is_int($n)
+            && $n >= $pickSize
+            && $n <= $mainNumbersMax;
+    }
+)));
+sort($options);
+
+// 4) build stats
+$stats = [];
+foreach ($options as $opt) {
+    $ways = combination($opt, $pickSize);
+    $odds = $ways ? round($totalCombinations / $ways) : 0;
+    $stats[] = [
+        'count' => $opt,
+        'ways'  => $ways,
+        'odds'  => $odds,
+        'pct'   => $ways
+                   ? round(100 * $ways / $totalCombinations, 2)
+                   : 0
+    ];
+}
+
+// (E) Grab the “best” (last) row for headlines
+$best = end($stats);
+
+// ── DYNAMIC BUCKETS BLOCK END ──
+
+
+// Securely connect to the Joomla database
+
+$dbCol = $db->quoteName($db->replacePrefix($foundSpec['tableName']));
+
+
+$gameIdCol = $db->quoteName('game_id');
+$drawDateCol = $db->quoteName('draw_date');
+
+// Prepare the SQL query securely
+$query = $db->getQuery(true)
+    ->select('*') // Include the game_name field
+    ->from($dbCol)
+    ->where($gameIdCol . ' = ' . $db->quote($gameId))
+    ->order($drawDateCol . ' ASC');
+
+$db->setQuery($query);
+$historicalResults = $db->loadObjectList();
+
+// Extract the lottery name from the database or default to 'Lottery' if not found
+$lotteryName = isset($historicalResults[0]->game_name) ? $historicalResults[0]->game_name : 'Lottery';
+
+// Count the total number of database entries
+$totalEntryCount = count($historicalResults);
+
+// Initialize variables
+$draws = [];
+$nearestDrawNumbers = [];
+$nearestDrawDate = '';
+
+// ───────────────────────────────────────────────────────────────
+// Use the actual last draw_date from the DB instead of today
+if (!empty($historicalResults)) {
+    // $historicalResults is ordered by draw_date ASC
+    $lastRow        = end($historicalResults);
+    $latestDrawDate = date('Y-m-d', strtotime($lastRow->draw_date));
+} else {
+    // Fallback if no history present
+    $latestDrawDate = date('Y-m-d');
+}
+// ───────────────────────────────────────────────────────────────
+
+if (!empty($historicalResults)) {
+    foreach ($historicalResults as $lr) {
+        // Collect historical draw numbers and date
+
+// build the numbers array dynamically based on our slices
+$numbers = [];
+// main balls
+foreach ($mainFieldNames as $col) {
+  $numbers[] = intval($lr->{$col});
+}
+// extra ball(s)
+foreach ($extraFieldNames as $col) {
+  $numbers[] = intval($lr->{$col});
+}
+
+        $draws[] = [
+            'numbers'   => $numbers,
+            'draw_date' => $lr->draw_date
+        ];
+    }
+
+    // Use the latest draw as the input for Analysis
+    $latestDrawData      = end($draws);
+    $latestResult        = $latestDrawData['numbers'];
+    $latestDrawDateFromDB = date('Y-m-d', strtotime($latestDrawData['draw_date']));
+
+    // Find the draw nearest to the selected date
+    $selectedDrawDate = isset($_POST['latestDrawDate'])
+        ? $_POST['latestDrawDate']
+        : $latestDrawDate;  // now correctly set from DB
+    $nearestDraw = null;
+
+    foreach ($draws as $draw) {
+        if (new DateTime($draw['draw_date']) <= new DateTime($selectedDrawDate)) {
+            $nearestDraw = $draw;
+        } else {
+            break;
+        }
+    }
+
+    if ($nearestDraw) {
+        $nearestDrawNumbers = $nearestDraw['numbers'];
+        $nearestDrawDate    = $nearestDraw['draw_date'];
+    }
+}
+
+?>
+
+[[!DOCTYPE html]]
+[[html]]
+[[head]]
+  [[meta charset="UTF-8"]]
+[[title]]
+  <?php
+    // Use Multi-State override label when applicable
+    $state     = $stateLabel;               // e.g. "Multi-State"
+    $today     = date('F j, Y');            // e.g. "July 8, 2025"
+    $fullTitle = "$lotteryName – $state – $today | LottoExpert";
+
+    // Output the actual <title> tag
+    echo '[[title]]' . htmlspecialchars($fullTitle, ENT_QUOTES, 'UTF-8') . '[[/title]]';
+  ?>
+[[/title]]
+
+
+
+[[link rel="preconnect" href="https://fonts.googleapis.com"]]
+[[link rel="preconnect" href="https://fonts.gstatic.com" crossorigin]]
+
+[[link rel="preload" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" as="style" onload="this.rel='stylesheet'"]]
+[[noscript]]
+  [[link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" rel="stylesheet"]]
+[[/noscript]]
+
+[[style id="critical-above-the-fold"]]
+:root{
+  --system-stack:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,"Apple Color Emoji","Segoe UI Emoji",sans-serif;
+}
+/* Make the hero title render immediately with a system stack (webfont swaps in later) */
+.ai-powerball-prediction h1{
+  font-family:var(--system-stack);
+  font-weight:700;
+  line-height:1.2;
+  margin:0 0 .25rem;
+  font-size:clamp(28px,3.2vw,40px);
+}
+/* Keep paragraph visible right away too */
+.ai-powerball-prediction > p{
+  font-family:var(--system-stack);
+}
+[[/style]]
+
+[[style]]
+:root{
+  --system-stack:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,"Apple Color Emoji","Segoe UI Emoji",sans-serif;
+
+  /* SKAI flat colors */
+  --skai-blue:#1C66FF;
+  --skai-navy:#0A1A33;
+  --skai-sky:#EFEFF5;
+  --skai-slate:#7F8DAA;
+  --skai-success:#20C997;
+  --skai-amber:#F5A623;
+
+  /* SKAI gradients */
+  --skai-gradient-primary:linear-gradient(135deg,#0A1A33 0%,#1C66FF 100%);
+  --skai-gradient-radiant:linear-gradient(135deg,#1C66FF 0%,#7F8DAA 100%);
+  --skai-gradient-slate:linear-gradient(180deg,#EFEFF5 0%,#FFFFFF 100%);
+}
+
+/* Global styles */
+body {
+  font-family: 'Roboto', var(--system-stack);
+  font-size: 16px;
+  line-height: 1.5;
+  background: var(--skai-gradient-slate);
+  color: var(--skai-navy);
+  margin: 0;
+  padding: 0;
+}
+
+/* Main container for analysis module */
+.ai-powerball-prediction {
+  background-color: #ffffff;
+  border-radius: 16px;
+  padding: 32px;
+  text-align: center;
+  margin: 32px auto;
+  max-width: 960px;
+  box-shadow: 0 18px 45px rgba(10,26,51,0.18);
+  border: 1px solid rgba(127,141,170,0.18);
+}
+
+/* Headings */
+.ai-powerball-prediction h1{
+  font-family:var(--system-stack);
+  font-weight:700;
+  line-height:1.2;
+  margin:0 0 .5rem;
+  font-size:clamp(28px,3.2vw,40px);
+  color:var(--skai-navy);
+}
+
+.ai-powerball-prediction h2 {
+  font-size: 32px;
+  font-weight: 700;
+  margin-bottom: 20px;
+  color: var(--skai-blue);
+  letter-spacing: 0.03em;
+}
+
+.ai-powerball-prediction h3 {
+  font-size: 22px;
+  font-weight: 600;
+  margin-top: 20px;
+  margin-bottom: 12px;
+  color: var(--skai-blue);
+}
+.ai-powerball-prediction h4 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 16px;
+  margin-bottom: 10px;
+  color: var(--skai-navy);
+}
+
+/* Buttons */
+button {
+  padding: 12px 20px;
+  font-size: 16px;
+  background-color: var(--skai-blue);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  margin-top: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+button:hover {
+  background-color: #144BDD;
+}
+
+button:disabled {
+  background-color: rgba(127,141,170,0.6);
+  cursor: not-allowed;
+}
+
+/* Secondary / neutral actions (e.g., Reset) */
+button.button-reset{
+  background-color: #ffffff;
+  color: var(--skai-slate);
+  border:1px solid rgba(127,141,170,0.6);
+}
+button.button-reset:hover{
+  background-color:#f5f7fb;
+}
+
+/* Parameter inputs styling */
+.parameter-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 20px;
+}
+
+/* SKAI Mode strip (Balanced / Explorative / Conservative) */
+.skai-mode-strip {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  justify-content:center;
+  align-items:center;
+  margin:18px auto 8px auto;
+}
+
+.skai-mode-label {
+  font-size:0.9rem;
+  color:var(--skai-slate);
+  margin-right:4px;
+}
+
+.skai-mode-btn {
+  border-radius:999px;
+  border:1px solid rgba(127,141,170,0.5);
+  background:#ffffff;
+  color:var(--skai-navy);
+  padding:6px 14px;
+  font-size:0.9rem;
+  font-weight:500;
+  cursor:pointer;
+  transition:background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.skai-mode-btn:hover {
+  background:#f5f7fb;
+  box-shadow:0 4px 10px rgba(10,26,51,0.1);
+}
+
+.skai-mode-btn.is-active {
+  background:var(--skai-gradient-radiant);
+  color:#ffffff;
+  border-color:transparent;
+  box-shadow:0 6px 16px rgba(10,26,51,0.22);
+}
+
+.skai-mode-description {
+  text-align:center;
+  font-size:0.9rem;
+  color:var(--skai-navy);
+  margin:4px auto 10px auto;
+  max-width:640px;
+}
+
+.parameter-inputs .parameter-item {
+  flex: 1 1 200px;
+  margin: 10px;
+}
+
+.parameter-inputs label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 5px;
+  color: var(--skai-navy);
+}
+
+.parameter-inputs input,
+.parameter-inputs select {
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(127,141,170,0.55);
+  width: 100%;
+  font-size: 14px;
+}
+
+/* Countdown and progress message */
+.countdown {
+  font-size: 15px;
+  font-weight: 500;
+  margin-top: 15px;
+  color: var(--skai-slate);
+}
+
+/* Parameter display box */
+#parameterDisplay {
+  background: var(--skai-gradient-radiant);
+  color: #fff;
+  padding: 16px 20px;
+  border-radius: 12px;
+  margin-top: 24px;
+  font-size: 14px;
+  text-align:left;
+}
+
+#parameterDisplay h3{
+  color:#ffffff;
+  margin-top:0;
+  margin-bottom:12px;
+}
+
+.parameterDisplayItem {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap:4px;
+  align-items: baseline;
+  margin: 3px 12px 3px 0;
+}
+
+.parameterDisplayItem label {
+  font-weight: 600;
+  color: rgba(255,255,255,0.8);
+}
+
+.parameterDisplayItem span {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* Number ball styling — reserve fixed size to prevent layout shifts */
+.number-ball {
+  flex: 0 0 60px;
+  border-radius: 50%;
+  background-color: #ffffff;
+  color: var(--skai-blue);
+  width: 60px;
+  height: 60px;
+  line-height: 60px;
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  margin: 10px 5px;
+  box-shadow: 0px 4px 10px rgba(10,26,51,0.12);
+  border: 2px solid rgba(127,141,170,0.5);
+}
+
+/* Extra / bonus variant */
+.number-ball.powerball {
+  flex: 0 0 60px;
+  background-color: var(--skai-blue);
+  color: #ffffff;
+  border-color: #144BDD;
+  box-shadow: 0px 4px 12px rgba(10,26,51,0.25);
+}
+
+/* Ranked number-ball wrapper: rank label above + number ball below */
+.skai-rank-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 4px 3px;
+}
+.skai-rank-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6b7280;
+  line-height: 1;
+  margin-bottom: 2px;
+  letter-spacing: 0.03em;
+}
+.skai-rank-wrap .number-ball {
+  margin: 0;
+  width: 52px;
+  height: 52px;
+  line-height: 52px;
+  font-size: 18px;
+  flex: 0 0 52px;
+}
+
+/* Extra ball section divider */
+.skai-extra-divider {
+  display: block;
+  width: 100%;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--skai-blue);
+  letter-spacing: 0.08em;
+  margin: 8px 0 4px;
+  opacity: 0.75;
+}
+
+/* Highlighting for matching numbers in backtesting */
+.match {
+  background-color: var(--skai-amber);
+  color: #000;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-weight: 700;
+}
+
+/* Loading animation */
+.loading .fun-message {
+  font-size: 14px;
+  margin-bottom: 4px;
+  color: var(--skai-slate);
+}
+
+.loading .spinner {
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid var(--skai-blue);
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s linear infinite;
+  margin: 8px auto;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Progress bar */
+.progress-bar-container {
+  background-color: #e0e7ed;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 10px;
+  width: 100%;
+}
+
+.progress-bar {
+  background: var(--skai-gradient-primary);
+  height: 20px;
+  width: 0%;
+  text-align: center;
+  color: #fff;
+  line-height: 20px;
+  font-size:12px;
+  transition: width 0.4s ease;
+}
+
+/* Analysis result section */
+#prediction {
+  margin-top: 24px;
+  display: none;
+}
+
+#prediction h3 {
+  text-align: center;
+  color: var(--skai-blue);
+}
+
+#predictedNumbers {
+  display: flex !important;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+/* Breakdown section */
+.breakdown-section {
+  background-color: #ffffff;
+  color: var(--skai-navy);
+  padding: 20px;
+  border-radius: 12px;
+  margin-top: 24px;
+  border: 1px solid rgba(127,141,170,0.3);
+}
+
+.breakdown-section h3 {
+  margin-bottom: 15px;
+  color: var(--skai-blue);
+}
+
+.breakdown-section table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.breakdown-section th, .breakdown-section td {
+  border: 1px solid rgba(127,141,170,0.3);
+  padding: 8px;
+  text-align: center;
+  font-size:14px;
+}
+
+.breakdown-section th {
+  background-color: var(--skai-blue);
+  color: #fff;
+}
+
+/* Custom container for detailed explanations */
+.custom-container {
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: left;
+  max-width: 720px;
+  margin: 20px auto;
+  padding: 20px 24px;
+  background-color: #ffffff;
+  border: 1px solid rgba(127,141,170,0.28);
+  border-radius: 12px;
+}
+
+/* Explanation section */
+.explanation-section {
+  background-color: #ffffff;
+  color: var(--skai-navy);
+  padding: 20px;
+  border-radius: 12px;
+  margin-top: 20px;
+  font-size: 14px;
+  line-height: 1.8;
+  border: 1px solid rgba(127,141,170,0.3);
+}
+
+/* Backtesting notice and results */
+#backtestNotice, #backtestResults {
+  background-color: #ffffff;
+  color: var(--skai-navy);
+  padding: 15px;
+  border-radius: 8px;
+  margin-top: 20px;
+  border: 1px solid rgba(127,141,170,0.3);
+}
+
+#backtestProgressContainer {
+  margin-top: 10px;
+}
+
+/* Reserve initial space for the hero card’s top area to minimize CLS */
+.ai-powerball-prediction{
+  min-height: 120px;
+}
+
+/* Button area: keep height stable even before fonts load */
+.ai-powerball-prediction [style*="text-align: center; margin-top: 20px;"]{
+  min-height: 56px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .parameter-inputs {
+    flex-direction: column;
+    align-items: center;
+  }
+  .parameter-item {
+    width: 100%;
+    max-width: 320px;
+  }
+}
+
+/* SKAI mode selector – Balanced / Explorative / Conservative */
+.skai-mode-strip {
+  max-width: 960px;
+  margin: 18px auto 10px auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.skai-mode-btn {
+  border-radius: 999px;
+  padding: 8px 14px;
+  border: 1px solid rgba(127,141,170,0.5);
+  background-color: #ffffff;
+  color: var(--skai-navy);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.skai-mode-btn span.skai-mode-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+
+.skai-mode-btn[aria-pressed="true"] {
+  background: var(--skai-gradient-radiant);
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: 0 8px 20px rgba(10,26,51,0.18);
+}
+
+.skai-mode-desc {
+  max-width: 720px;
+  margin: 6px auto 18px auto;
+  font-size: 13px;
+  color: var(--skai-slate);
+  text-align: center;
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .skai-mode-strip {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .skai-mode-btn {
+    justify-content: center;
+  }
+}
+
+
+
+
+/* ─── SKAI Guided UX: Page Orientation Block ─────────────────────── */
+.skai-orient {
+  background: var(--skai-gradient-primary);
+  border-radius: 14px;
+  padding: 22px 28px 20px;
+  margin: 0 0 24px 0;
+  color: #fff;
+  text-align: left;
+}
+.skai-orient h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 8px 0;
+  letter-spacing: 0.02em;
+}
+.skai-orient p {
+  font-size: 0.93rem;
+  line-height: 1.6;
+  margin: 0;
+  color: rgba(255,255,255,0.88);
+}
+.skai-orient .skai-orient-outcome {
+  display: inline-block;
+  margin-top: 12px;
+  background: rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 999px;
+  padding: 4px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.01em;
+}
+
+/* ─── SKAI Guided UX: 3-Step How-It-Works Card ───────────────────── */
+.skai-how-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 22px 0;
+  padding: 0;
+  list-style: none;
+}
+.skai-how-card li {
+  flex: 1;
+  min-width: 160px;
+  background: #fff;
+  border: 1px solid rgba(127,141,170,0.2);
+  border-radius: 12px;
+  padding: 16px 16px 14px;
+  text-align: left;
+  box-shadow: 0 4px 12px rgba(10,26,51,0.07);
+}
+.skai-how-card li .skai-step-num {
+  display: inline-block;
+  background: var(--skai-gradient-primary);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  border-radius: 999px;
+  padding: 2px 9px;
+  margin-bottom: 8px;
+}
+.skai-how-card li strong {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--skai-navy);
+  margin-bottom: 3px;
+}
+.skai-how-card li span {
+  font-size: 0.82rem;
+  color: var(--skai-slate);
+  line-height: 1.5;
+}
+
+/* ─── SKAI Guided UX: Inline Step Labels ─────────────────────────── */
+.skai-step-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 24px 0 10px 0;
+  padding: 0;
+}
+.skai-step-badge {
+  background: var(--skai-blue);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.skai-step-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--skai-navy);
+}
+.skai-step-hint {
+  font-size: 0.8rem;
+  color: var(--skai-slate);
+  margin-left: auto;
+}
+@media (max-width: 600px) {
+  .skai-step-hint { display: none; }
+  .skai-how-card li { min-width: 140px; }
+}
+
+/* ─── SKAI Guided UX: Persistent Help Strip ─────────────────────── */
+.skai-help-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: #f1f4fb;
+  border: 1px solid rgba(28,102,255,0.15);
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-size: 0.85rem;
+  color: var(--skai-navy);
+  margin: 22px 0 0 0;
+  flex-wrap: wrap;
+  text-align: center;
+}
+.skai-help-strip a {
+  color: var(--skai-blue);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.skai-help-strip a:hover { text-decoration: underline; }
+.skai-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--skai-blue);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ─── Improved backtesting card ──────────────────────────────────── */
+.skai-backtest-card {
+  background: #fff;
+  border: 1px solid rgba(127,141,170,0.22);
+  border-radius: 12px;
+  padding: 16px 18px;
+  max-width: 640px;
+  margin: 0 auto;
+  text-align: left;
+}
+.skai-backtest-card h4 {
+  margin: 0 0 6px 0;
+  font-size: 0.95rem;
+  color: var(--skai-navy);
+}
+.skai-backtest-card p {
+  margin: 0 0 10px 0;
+  font-size: 0.85rem;
+  color: var(--skai-slate);
+  line-height: 1.55;
+}
+
+/* ─── Improved mode button subtext ───────────────────────────────── */
+.skai-mode-btn > span:last-child {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 400;
+  margin-top: 2px;
+  line-height: 1.4;
+  opacity: 0.82;
+}
+
+[[/style]]
+[[script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js" defer]][[/script]]
+[[script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer]][[/script]]
+
+
+[[/head]]
+[[body]]
+[[div class="ai-powerball-prediction"]]
+  <?php
+    $state       = $stateLabel;
+    $today       = date('F j, Y');
+    $headingText = "$lotteryName – $state – $today";
+  ?>
+  [[h1]]AI-Powered Lottery Prediction Analysis for <?php echo htmlspecialchars($headingText, ENT_QUOTES, 'UTF-8'); ?>[[/h1]]
+[[p]]
+  Unlock a clear, data-driven prediction powered by the LottoExpert AI Engine — our original, proprietary prediction system built and maintained by LottoExpert.net.
+  Review how the model performed on past draws, see your numbers ranked by probability,
+  and decide how to play with more clarity and control.
+[[/p]]
+
+  <!-- SKAI Page Orientation: What is this page + how it works -->
+  [[div class="skai-orient"]]
+    [[h2]]What You Can Do Here[[/h2]]
+    [[p]]Use the LottoExpert AI Engine to generate a ranked set of numbers for [[strong]]<?php echo htmlspecialchars($lotteryName, ENT_QUOTES, 'UTF-8'); ?>[[/strong]]. The engine analyses every past draw, builds a probability model, and returns your top picks — ranked by likelihood.[[/p]]
+    [[span class="skai-orient-outcome"]]Your outcome: a probability-ranked list of numbers, ready to play or save[[/span]]
+  [[/div]]
+
+  <!-- SKAI "How This Page Works" 3-step guide -->
+  [[ul class="skai-how-card" id="skai-page-guide" aria-label="How to use this page"]]
+    [[li]]
+      [[span class="skai-step-num"]]STEP 1[[/span]]
+      [[strong]]Configure (optional)[[/strong]]
+      [[span]]Choose a strategy mode and optionally adjust settings below.[[/span]]
+    [[/li]]
+    [[li]]
+      [[span class="skai-step-num"]]STEP 2[[/span]]
+      [[strong]]Run the analysis[[/strong]]
+      [[span]]Click [[em]]Start Analysis[[/em]]. The AI engine processes past draws and ranks every number by probability.[[/span]]
+    [[/li]]
+    [[li]]
+      [[span class="skai-step-num"]]STEP 3[[/span]]
+      [[strong]]Review and save[[/strong]]
+      [[span]]See your ranked number list and save your picks to your dashboard.[[/span]]
+    [[/li]]
+  [[/ul]]
+
+    <!-- Start Analysis Buttons -->
+    <?php if ($userIsInAllowedGroup): ?>
+      <!-- SKAI Guided UX: CTA context label -->
+      [[div class="skai-step-label"]]
+        [[span class="skai-step-badge" style="background:var(--skai-success);"]]START[[/span]]
+        [[span class="skai-step-title"]]Run the Analysis when ready[[/span]]
+        [[span class="skai-step-hint"]]Configure strategy and settings below first[[/span]]
+      [[/div]]
+
+      [[div style="text-align: center; margin-top: 20px;"]]
+[[button id="startPrediction" type="button"
+   style="
+     display:block;
+     width:100%;
+     max-width:320px;
+     margin:0 auto;
+   "]]
+  Start Analysis
+[[/button]]
+[[button onclick="location.reload()" type="button" class="button-reset" style="margin-left:10px;"]]
+  Reset
+[[/button]]
+      [[/div]]
+
+<!-- SKAI: Run 9-Combo Default Batch button -->
+[[div style="margin:10px 0 4px 0;"]]
+  [[button type="button" id="skai-batch-launch" class="btn-outline"
+    style="display:inline-block;font-size:0.9rem;padding:7px 14px;"]]
+    Run 9-Combo Default Batch
+  [[/button]]
+  [[div style="font-size:0.8rem;color:#6b7280;margin-top:3px;"]]
+    Runs all nine default combinations. This can take a long time.
+  [[/div]]
+[[/div]]
+
+<!-- SKAI: Batch confirmation modal -->
+[[div id="skai-batch-modal"
+  style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);z-index:9990;align-items:center;justify-content:center;"]]
+  [[div style="background:#fff;border-radius:14px;padding:28px 24px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.22);margin:auto;margin-top:10vh;"]]
+    [[h3 style="margin:0 0 12px 0;font-size:1.1rem;"]]Run all 9 combinations?[[/h3]]
+    [[p style="font-size:0.9rem;line-height:1.55;color:#374151;margin:0 0 10px 0;"]]
+      The LottoExpert AI Engine will run [[strong]]9 separate projections[[/strong]] back to back.
+      Each one covers a different combination of risk profile and strategy.
+    [[/p]]
+    [[ul style="font-size:0.88rem;color:#374151;margin:0 0 10px 0;padding-left:18px;line-height:1.7;"]]
+      [[li]][[strong]]Risk profiles:[[/strong]] Balanced, Explorative, Conservative[[/li]]
+      [[li]][[strong]]Strategies:[[/strong]] AI-Forward, Balanced Mix, Skip Pattern Boost[[/li]]
+    [[/ul]]
+    [[p style="font-size:0.88rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin:0 0 10px 0;"]]
+      This may take several minutes. You can stop the batch at any time using the Stop button.
+    [[/p]]
+    [[p style="font-size:0.88rem;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin:0 0 16px 0;"]]
+      [[strong]]About saving:[[/strong]] Do not click Save while the batch is running.
+      A [[strong]]Save All 9[[/strong]] button will appear automatically once every run is complete.
+      You can also save individual runs or stop early and save whatever has finished.
+    [[/p]]
+    [[div style="display:flex;gap:10px;flex-wrap:wrap;"]]
+      [[button type="button" id="skai-batch-confirm" class="btn" style="flex:1;min-width:120px;"]]
+        Start Batch
+      [[/button]]
+      [[button type="button" id="skai-batch-cancel" class="btn-outline" style="flex:1;min-width:100px;"]]
+        Cancel
+      [[/button]]
+    [[/div]]
+  [[/div]]
+[[/div]]
+
+<!-- SKAI: Batch progress panel -->
+[[div id="skai-batch-panel" style="display:none;margin:14px 0 0 0;border:1px solid #e5e7eb;border-radius:12px;padding:16px;background:#f9fafb;"]]
+  [[div style="font-weight:700;font-size:0.98rem;margin-bottom:8px;"]]Batch Progress[[/div]]
+  [[div id="skai-batch-progress-text" style="font-size:0.9rem;color:#374151;margin-bottom:4px;"]]
+    Completed 0 of 9
+  [[/div]]
+  [[div id="skai-batch-current-label" style="font-size:0.85rem;color:#6b7280;margin-bottom:10px;"]]
+    Ready
+  [[/div]]
+  [[div id="skai-batch-save-note" style="font-size:0.83rem;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin-bottom:12px;"]]
+    [[strong]]What to do while it runs:[[/strong]] Just wait. You do not need to click Save during the batch.
+    When all runs are finished, a [[strong]]Save All 9[[/strong]] button will appear right below this grid.
+    You can also stop early and save whichever runs have already completed.
+  [[/div]]
+  [[div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;"]]
+    [[button type="button" id="skai-batch-stop" class="btn-outline"
+      style="font-size:0.85rem;padding:5px 12px;color:#dc2626;border-color:#dc2626;"]]
+      Stop Batch
+    [[/button]]
+    [[button type="button" id="skai-batch-clear" class="btn-outline"
+      style="font-size:0.85rem;padding:5px 12px;"]]
+      Clear Batch
+    [[/button]]
+  [[/div]]
+
+  <!-- 3x3 results grid -->
+  [[div style="overflow-x:auto;"]]
+    [[table id="skai-batch-grid" style="width:100%;border-collapse:collapse;font-size:0.82rem;"]]
+      [[thead]]
+        [[tr]]
+          [[th style="padding:6px 8px;background:#f3f4f6;border:1px solid #e5e7eb;text-align:left;"]]Profile / Strategy[[/th]]
+          [[th style="padding:6px 8px;background:#f3f4f6;border:1px solid #e5e7eb;text-align:center;"]]AI-Forward[[/th]]
+          [[th style="padding:6px 8px;background:#f3f4f6;border:1px solid #e5e7eb;text-align:center;"]]Balanced Mix[[/th]]
+          [[th style="padding:6px 8px;background:#f3f4f6;border:1px solid #e5e7eb;text-align:center;"]]Skip Pattern Boost[[/th]]
+        [[/tr]]
+      [[/thead]]
+      [[tbody]]
+        [[tr]]
+          [[td style="padding:6px 8px;border:1px solid #e5e7eb;font-weight:600;background:#f9fafb;"]]Balanced[[/td]]
+          [[td id="skai-cell-balanced-ai"     style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;" data-profile="balanced" data-strategy="ai"]]Pending[[/td]]
+          [[td id="skai-cell-balanced-hybrid" style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;" data-profile="balanced" data-strategy="hybrid"]]Pending[[/td]]
+          [[td id="skai-cell-balanced-skip"   style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;" data-profile="balanced" data-strategy="skip"]]Pending[[/td]]
+        [[/tr]]
+        [[tr]]
+          [[td style="padding:6px 8px;border:1px solid #e5e7eb;font-weight:600;background:#f9fafb;"]]Explorative[[/td]]
+          [[td id="skai-cell-explorative-ai"     style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;" data-profile="explorative" data-strategy="ai"]]Pending[[/td]]
+          [[td id="skai-cell-explorative-hybrid" style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;" data-profile="explorative" data-strategy="hybrid"]]Pending[[/td]]
+          [[td id="skai-cell-explorative-skip"   style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;" data-profile="explorative" data-strategy="skip"]]Pending[[/td]]
+        [[/tr]]
+        [[tr]]
+          [[td style="padding:6px 8px;border:1px solid #e5e7eb;font-weight:600;background:#f9fafb;"]]Conservative[[/td]]
+          [[td id="skai-cell-conservative-ai"     style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;" data-profile="conservative" data-strategy="ai"]]Pending[[/td]]
+          [[td id="skai-cell-conservative-hybrid" style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;" data-profile="conservative" data-strategy="hybrid"]]Pending[[/td]]
+          [[td id="skai-cell-conservative-skip"   style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;" data-profile="conservative" data-strategy="skip"]]Pending[[/td]]
+        [[/tr]]
+      [[/tbody]]
+    [[/table]]
+  [[/div]]
+
+  <!-- Batch result detail area -->
+  [[div id="skai-batch-detail" style="display:none;margin-top:14px;padding:12px;border:1px solid #d1fae5;border-radius:8px;background:#f0fdf4;"]]
+    [[div style="font-weight:600;margin-bottom:6px;" id="skai-batch-detail-title"]]Result[[/div]]
+    [[div id="skai-batch-detail-body" style="font-size:0.85rem;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow-y:auto;"]][[/div]]
+    [[button type="button" id="skai-batch-detail-close" class="btn-outline"
+      style="margin-top:8px;font-size:0.82rem;padding:4px 10px;"]]Close[[/button]]
+  [[/div]]
+
+  <!-- Save all / Save selected (post-completion) -->
+  [[div id="skai-batch-save-row" style="display:none;margin-top:12px;gap:8px;flex-wrap:wrap;"]]
+    [[div style="width:100%;font-size:0.85rem;color:#065f46;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 12px;margin-bottom:8px;"]]
+      [[strong]]All runs are done.[[/strong]] Click [[strong]]Save All 9[[/strong]] to save every result to your dashboard in one go,
+      or click [[strong]]Save Selected[[/strong]] to pick only the ones you want.
+      You stay on this page the whole time - nothing disappears.
+    [[/div]]
+    [[button type="button" id="skai-batch-save-all" class="btn-outline"
+      style="font-size:0.85rem;padding:6px 14px;"]]
+      Save All 9
+    [[/button]]
+    [[button type="button" id="skai-batch-save-selected" class="btn-outline"
+      style="font-size:0.85rem;padding:6px 14px;"]]
+      Save Selected
+    [[/button]]
+  [[/div]]
+[[/div]]
+
+<!-- SKAI: How this works - help panel (always visible) -->
+[[details id="skai-how-it-works"
+  style="margin:14px 0 0 0;border:1px solid #e5e7eb;border-radius:12px;padding:0;background:#fff;"]]
+  [[summary style="padding:12px 16px;font-weight:700;font-size:0.95rem;cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;"]]
+    How this works
+    [[span style="font-size:0.8rem;font-weight:400;color:#6b7280;"]]Click to expand[[/span]]
+  [[/summary]]
+  [[div style="padding:4px 16px 16px 16px;font-size:0.88rem;line-height:1.65;color:#374151;"]]
+    [[p]][[strong]]Run 9-Combo Default Batch[[/strong]] runs nine separate LottoExpert AI analysis combinations all at once.
+    Think of it like asking nine different experts to look at the same lottery and each one uses a slightly different style.
+    Some are bold and exploratory. Some are careful and conservative. Some lean on patterns; others lean on the AI engine.
+    Together they give you a full picture.[[/p]]
+    [[p]][[strong]]Why does it take long?[[/strong]] Each run is a complete analysis. The LottoExpert AI Engine has to look through all the historical draw data,
+    run its model, and score every number. Nine of those in a row takes some patience. You can stop at any time and keep the results you already have.[[/p]]
+    [[p]][[strong]]What does the grid mean?[[/strong]] The 3 rows are the three risk styles (Balanced, Explorative, Conservative).
+    The 3 columns are the three strategy modes (AI-Forward, Balanced Mix, Skip Pattern Boost).
+    Each cell shows whether that combination is Pending, Running, or Done.
+    When a run finishes, a View link appears so you can look at the picks it produced.[[/p]]
+    [[p]][[strong]]What does Save All 9 do?[[/strong]] It saves each completed run to your dashboard one at a time, automatically.
+    You will see a small green confirmation for each one. Nothing disappears. You stay on this page the whole time.[[/p]]
+    [[p]][[strong]]Should I click Save while the batch is still running?[[/strong]] No. Do not click Save during the batch.
+    Just let it run. When the last combination finishes, a green [[strong]]Save All 9[[/strong]] button appears automatically
+    right below the grid. That is your signal that everything is ready to save.[[/p]]
+    [[p]][[strong]]What if I stop the batch early?[[/strong]] No problem. Whatever runs already finished are kept.
+    The Save All 9 button appears as soon as you stop, so you can save whichever results are already done.[[/p]]
+    [[p]][[strong]]What happens after you click Save?[[/strong]] Nothing scary. You stay right here. A small green message appears near the save button
+    so you know it worked. Your picks and all your settings remain visible exactly as they were.[[/p]]
+  [[/div]]
+[[/details]]
+
+    <?php else: ?>
+      [[div style="text-align: center; margin-top: 20px;"]]
+        [[button type="button" style="padding: 10px 20px; background-color: #3498db; color: white; border: none; border-radius: 5px; cursor: pointer;" onclick="showSignUpPopup()"]]
+          Start Analysis
+        [[/button]]
+        [[button type="button" style="padding: 10px 20px; background-color: #e74c3c; color: white; border: none; border-radius: 5px; cursor: pointer; margin-left: 10px;" onclick="showSignUpPopup()"]]
+          Reset
+        [[/button]]
+      [[/div]]
+[[style]]
+/* Modal Styling – Membership prompt */
+#signupOverlay {
+  display: none;
+  position: fixed;
+  z-index: 9999;
+  left: 0; top: 0;
+  width: 100%; height: 100%;
+  background-color: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+}
+
+#signupModal {
+  background: #fff;
+  border-radius: 16px;
+  max-width: 480px;
+  margin: 10% auto;
+  padding: 2.5rem 2rem;
+  text-align: center;
+  box-shadow: 0 22px 50px rgba(10,26,51,0.35);
+  font-family: var(--system-stack);
+  position: relative;
+  line-height: 1.6;
+}
+
+#signupModalClose {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  font-size: 1.75rem;
+  font-weight: 400;
+  color: var(--skai-slate);
+  cursor: pointer;
+}
+
+.signup-btn {
+  display: inline-block;
+  background: var(--skai-gradient-primary);
+  color: #fff;
+  padding: 0.9em 1.8em;
+  margin-top: 1.5em;
+  font-size: 1.05em;
+  font-weight: 600;
+  border: none;
+  border-radius: 999px;
+  text-decoration: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.signup-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 25px rgba(10,26,51,0.25);
+}
+[[/style]]
+
+[[div id="signupOverlay"]]
+  [[div id="signupModal"]]
+    [[span id="signupModalClose"]]×[[/span]]
+    [[h2 style="font-size:1.8em; margin-bottom:.5em;"]]
+      Smart Play Starts Here
+    [[/h2]]
+    [[p style="font-size:1.05em; color:#444;"]]
+      You’re exploring one of the most advanced lottery tools available — but this one’s just for members.
+    [[/p]]
+    [[p style="margin-top:1em; font-size:1.05em; color:#222; font-weight:500;"]]
+      As a member, you unlock AI-powered predictions, intelligent strategy models, and custom insights tailored to how[[strong]] you[[/strong]] play.
+    [[/p]]
+    [[p style="margin-top:1.25em; font-size:0.95em; color:#666;"]]
+      No hype. No false promises. Just transparent, data-driven tools built to help you play smarter — every time.
+    [[/p]]
+    [[a class="signup-btn" href="/membership/lottoexpert-subscriptions" target="_blank"]]
+      View Plans & Join the Smarter Game
+    [[/a]]
+  [[/div]]
+[[/div]]
+
+[[script]]
+function showSignUpPopup() {
+  document.getElementById('signupOverlay').style.display = 'block';
+  document.body.style.overflow = 'hidden';
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  var close = document.getElementById('signupModalClose');
+  var overlay = document.getElementById('signupOverlay');
+
+  close.addEventListener('click', function () {
+    overlay.style.display = 'none';
+    document.body.style.overflow = '';
+  });
+
+  overlay.addEventListener('click', function (e) {
+    if (e.target === overlay) {
+      overlay.style.display = 'none';
+      document.body.style.overflow = '';
+    }
+  });
+});
+[[/script]]
+
+<!-- Removed legacy runPredictionBtn gating script.
+     Access is now controlled via PHP user group checks
+     and the SKAI membership modal (showSignUpPopup). -->
+
+    <?php endif; ?>
+    
+    <!-- Advanced Backtesting Section (moved below the Start Analysis buttons) -->
+    [[div class="skai-backtest-card" style="margin: 20px auto;"]]
+      [[h4]]Backtesting (Optional)[[/h4]]
+      [[p]]
+        Run your chosen settings against recent past draws to see how the model would have performed. This does not affect your main analysis.
+      [[/p]]
+      [[label for="enableBacktest"]]
+        [[input type="checkbox" id="enableBacktest" name="enableBacktest" style="margin-right: 8px;" /]]
+        Enable Backtest
+      [[/label]]
+      [[label for="numDrawsBacktest"]]
+  Select Number of Draws for Backtest:
+  [[select id="numDrawsBacktest" name="numDrawsBacktest"]]
+    [[option value="1"]]1 Draw[[/option]]
+    [[option value="2"]]2 Draws[[/option]]
+    [[option value="3"]]3 Draws[[/option]]
+    [[option value="4"]]4 Draws[[/option]]
+    [[option value="5"]]5 Draws[[/option]]
+  [[/select]]
+[[/label]]
+    [[/div]]
+    
+    [[p style="color:var(--skai-slate); font-size:0.88rem; margin-bottom:4px;"]]Choose a strategy mode, then click [[strong]]Start Analysis[[/strong]]. Advanced settings are optional — the defaults work well for most players.[[/p]]
+    [[p style="font-size:0.83rem; color:var(--skai-slate); margin-bottom:0;"]]Analyzing [[strong]]<?php echo $totalEntryCount; ?>[[/strong]] historical draw records for <?php echo htmlspecialchars($lotteryName, ENT_QUOTES, 'UTF-8'); ?>.[[/p]]
+
+    <!-- SKAI Guided UX: Step 1 label -->
+    [[div class="skai-step-label"]]
+      [[span class="skai-step-badge"]]STEP 1[[/span]]
+      [[span class="skai-step-title"]]Choose Your Analysis Strategy[[/span]]
+      [[span class="skai-step-hint"]]Not sure? Start with Balanced.[[/span]]
+    [[/div]]
+
+    <!-- SKAI Mode Presets (Balanced / Explorative / Conservative + SKAI Blend Modes) -->
+    [[div class="skai-mode-strip" role="radiogroup" aria-label="Choose how the LottoExpert AI Engine should analyze this game"]]
+      [[button
+        type="button"
+        class="skai-mode-btn"
+        data-skai-mode="balanced"
+        aria-pressed="true"
+      ]]
+        [[span class="skai-mode-label"]]Balanced[[/span]]
+        [[span]]Everyday play – steady, game-tuned settings.[[/span]]
+      [[/button]]
+
+      [[button
+        type="button"
+        class="skai-mode-btn"
+        data-skai-mode="mixed"
+        aria-pressed="false"
+      ]]
+        [[span class="skai-mode-label"]]Mixed[[/span]]
+        [[span]]Adaptive blend based on AI–Skip agreement.[[/span]]
+      [[/button]]
+
+      [[button
+        type="button"
+        class="skai-mode-btn"
+        data-skai-mode="ai-forward"
+        aria-pressed="false"
+      ]]
+        [[span class="skai-mode-label"]]AI-forward[[/span]]
+        [[span]]Leans harder into the neural net signal.[[/span]]
+      [[/button]]
+
+      [[button
+        type="button"
+        class="skai-mode-btn"
+        data-skai-mode="skip-dominant"
+        aria-pressed="false"
+      ]]
+        [[span class="skai-mode-label"]]Skip-dominant[[/span]]
+        [[span]]Leans harder into Skip & Hit dynamics.[[/span]]
+      [[/button]]
+
+      [[button
+        type="button"
+        class="skai-mode-btn"
+        data-skai-mode="explorative"
+        aria-pressed="false"
+      ]]
+        [[span class="skai-mode-label"]]Explorative[[/span]]
+        [[span]]Chases recent patterns more aggressively.[[/span]]
+      [[/button]]
+
+      [[button
+        type="button"
+        class="skai-mode-btn"
+        data-skai-mode="conservative"
+        aria-pressed="false"
+      ]]
+        [[span class="skai-mode-label"]]Conservative[[/span]]
+        [[span]]Stays closer to long-term behaviour.[[/span]]
+      [[/button]]
+    [[/div]]
+
+    <!-- PATCH 7A: Live SKAI blend readout (AI λ vs Skip 1−λ, plus β and T) -->
+    [[div id="skaiBlendReadout"
+      style="margin-top:10px; padding:10px; border:1px solid rgba(0,0,0,0.12); border-radius:8px; font-weight:700; color:var(--skai-navy);"
+      aria-live="polite"
+    ]]
+      Mode: balanced • AI weight: 0.65 • Skip weight: 0.35 • Sharpness: 2.00 • Temp: 1.00
+    [[/div]]
+
+    [[p id="skaiModeDescription" class="skai-mode-desc skai-mode-description"]]
+      Balanced mode uses game-specific defaults for <?php echo htmlspecialchars($lotteryName, ENT_QUOTES, 'UTF-8'); ?> – a steady choice for most sessions.
+    [[/p]]
+
+    [[div class="custom-container"]]
+      [[details]]
+        [[summary]]Training Parameters Explained[[/summary]]
+        [[h4 style="margin-top: 10px;"]]Epochs[[/h4]]
+        [[p]][[strong]]Definition:[[/strong]] An epoch is one complete pass through the entire dataset.[[/p]]
+        [[p]][[strong]]Typical Range:[[/strong]] 10 to 1000.[[/p]]
+        [[ul style="padding-left: 20px; margin-top: 5px;"]]
+          [[li]]Increasing epochs can help the model learn more patterns but may cause overfitting.[[/li]]
+          [[li]]Decreasing epochs speeds training but may underfit the data.[[/li]]
+        [[/ul]]
+        [[h4 style="margin-top: 10px;"]]Batch Size[[/h4]]
+        [[p]][[strong]]Definition:[[/strong]] How many samples are processed at once before updating the model.[[/p]]
+        [[p]][[strong]]Typical Range:[[/strong]] 8 to 256.[[/p]]
+        [[ul style="padding-left: 20px; margin-top: 5px;"]]
+          [[li]]Larger batch sizes speed up training but may miss finer details.[[/li]]
+          [[li]]Smaller batches are more precise but slower.[[/li]]
+        [[/ul]]
+        [[h4 style="margin-top: 10px;"]]Dropout Rate[[/h4]]
+        [[p]][[strong]]Definition:[[/strong]] The fraction of neurons randomly ignored during training to prevent overfitting.[[/p]]
+        [[p]][[strong]]Typical Range:[[/strong]] 0.1 to 0.5.[[/p]]
+        [[ul style="padding-left: 20px; margin-top: 5px;"]]
+          [[li]]Higher dropout reduces overfitting but can slow learning.[[/li]]
+          [[li]]Lower dropout allows more learning but may overfit.[[/li]]
+        [[/ul]]
+        [[h4 style="margin-top: 10px;"]]Learning Rate[[/h4]]
+        [[p]][[strong]]Definition:[[/strong]] Controls how quickly the model adjusts its knowledge each step.[[/p]]
+        [[p]][[strong]]Typical Range:[[/strong]] 0.0001 to 0.1.[[/p]]
+        [[ul style="padding-left: 20px; margin-top: 5px;"]]
+          [[li]]Higher rates learn faster but can skip important details.[[/li]]
+          [[li]]Lower rates learn more carefully but slowly.[[/li]]
+        [[/ul]]
+        [[h4 style="margin-top: 10px;"]]Activation Function[[/h4]]
+        [[p]][[strong]]Definition:[[/strong]] The function that decides how a neuron fires. Introduces complexity to model patterns.[[/p]]
+        [[p]][[strong]]Common Choices:[[/strong]] ReLU, Sigmoid, Tanh.[[/p]]
+        [[h4 style="margin-top: 10px;"]]Hidden Layers[[/h4]]
+        [[p]][[strong]]Definition:[[/strong]] Layers between the input and output. More layers can detect more complex patterns.[[/p]]
+        [[p]][[strong]]Typical Range:[[/strong]] 1 to 5.[[/p]]
+        
+        [[h4 style="margin-top: 10px;"]]Recency Decay[[/h4]]
+        [[p]][[strong]]Definition:[[/strong]] Recency Decay controls how much we care about old draws versus new ones. If it’s 1.0, every draw is treated exactly the same. If it’s lower (like 0.8), each step back in time becomes a bit less important.[[/p]]
+        [[p]][[strong]]Imagine this:[[/strong]] You collect a sticker each day. With 0.8 decay, yesterday’s sticker counts full, but the one from two days ago counts as 0.8×1=0.8, three days ago as 0.8×0.8=0.64, and so on.[[/p]]
+        [[p]][[strong]]Why It Helps:[[/strong]] It lets the AI focus more on recent trends without forgetting the past completely.[[/p]]
+        [[ul style="padding-left: 20px; margin-top: 5px;"]]
+         [[li]]1.0 means “all days are equally important.”[[/li]]
+         [[li]]0.9 means “each day back is 10% less important.”[[/li]]
+         [[li]]0.5 makes older days fade very fast (half as important each step).[[/li]]
+        [[/ul]]
+        
+        [[h4 style="margin-top: 10px;"]]What is Overfitting?[[/h4]]
+        [[p]]Overfitting happens when the model memorizes the training data rather than learning general patterns. Using dropout and proper tuning helps prevent this.[[/p]]
+      [[/details]]
+    [[/div]]
+
+    <!-- SKAI Guided UX: Step 2 label -->
+    [[div class="skai-step-label"]]
+      [[span class="skai-step-badge" style="background:var(--skai-slate);"]]OPTIONAL[[/span]]
+      [[span class="skai-step-title"]]Fine-tune AI Parameters[[/span]]
+      [[span class="skai-step-hint"]]Skip this if you are new.[[/span]]
+    [[/div]]
+
+    [[div class="custom-container"]]
+      [[details]]
+        [[summary]]Advanced Settings (Optional)[[/summary]]
+        [[form id="predictionForm" onsubmit="return false;"]]
+          [[div class="parameter-inputs"]]
+            [[div class="parameter-item"]]
+              [[label for="epochs"]]Epochs:[[br]]
+                [[input type="number" id="epochs" name="epochs" value="<?php echo htmlspecialchars($epochs); ?>" min="1"]]
+              [[/label]]
+            [[/div]]
+            [[div class="parameter-item"]]
+              [[label for="batchSize"]]Batch Size:[[br]]
+                [[input type="number" id="batchSize" name="batchSize" value="<?php echo htmlspecialchars($batchSize); ?>" min="1"]]
+              [[/label]]
+            [[/div]]
+            [[div class="parameter-item"]]
+              [[label for="dropoutRate"]]Dropout Rate:[[br]]
+                [[input type="number" id="dropoutRate" name="dropoutRate" step="0.1" value="<?php echo htmlspecialchars($dropoutRate); ?>" min="0" max="1"]]
+              [[/label]]
+            [[/div]]
+            [[div class="parameter-item"]]
+              [[label for="learningRate"]]Learning Rate:[[br]]
+                [[input type="number" id="learningRate" name="learningRate" step="0.0001" value="<?php echo htmlspecialchars($learningRate); ?>" min="0"]]
+              [[/label]]
+            [[/div]]
+            [[div class="parameter-item"]]
+              [[label for="activationFunction"]]Activation Function:[[br]]
+                [[select id="activationFunction" name="activationFunction"]]
+                  [[option value="relu" <?php echo $activationFunction === 'relu' ? 'selected' : ''; ?>]]ReLU[[/option]]
+                  [[option value="sigmoid" <?php echo $activationFunction === 'sigmoid' ? 'selected' : ''; ?>]]Sigmoid[[/option]]
+                  [[option value="tanh" <?php echo $activationFunction === 'tanh' ? 'selected' : ''; ?>]]Tanh[[/option]]
+                [[/select]]
+              [[/label]]
+            [[/div]]
+            [[div class="parameter-item"]]
+              [[label for="hiddenLayers"]]Hidden Layers:[[br]]
+                [[input type="number" id="hiddenLayers" name="hiddenLayers" value="<?php echo htmlspecialchars($hiddenLayers); ?>" min="1"]]
+              [[/label]]
+            [[/div]]
+             [[div class="parameter-item"]]
+               [[label for="recencyDecay"]]
+                 Recency Decay:[[br]]
+                 [[div style="display:flex; gap:10px; align-items:center;"]]
+                   [[input
+                     type="number"
+                     id="recencyDecay"
+                     name="recencyDecay"
+                     step="0.01"
+                     min="0"
+                     max="1"
+                     value="<?php echo htmlspecialchars($gameConfig['recencyDecay'] ?? 1); ?>"
+                   ]]
+                   [[span
+                     id="recencyDecayLambdaReadout"
+                     style="min-width:92px; text-align:right; font-weight:700; color:var(--skai-navy);"
+                     aria-live="polite"
+                   ]]
+                     1.00
+                   [[/span]]
+                 [[/div]]
+               [[/label]]
+             [[/div]]
+             [[div class="parameter-item"]]
+              [[label for="latestDrawDate"]]Latest Draw Date:[[br]]
+                [[input type="date" id="latestDrawDate" name="latestDrawDate" value="<?php echo htmlspecialchars($latestDrawDate); ?>"]]
+              [[/label]]
+            [[/div]]
+          [[/div]]
+        [[/form]]
+      [[/details]]
+    [[/div]]
+    
+    [[div id="parameterDisplay"]]
+
+      [[h3]]Parameters Used for Analysis[[/h3]]
+      [[div class="parameterDisplayItem"]]
+        [[label]]Analysis Date and Time: [[/label]] [[span id="predictionDateValue"]]N/A[[/span]]
+      [[/div]]
+      [[div class="parameterDisplayItem"]]
+        [[label]]Total Entry Count: [[/label]] [[span]]<?php echo $totalEntryCount; ?>[[/span]]
+      [[/div]]
+      [[div class="parameterDisplayItem"]]
+        [[label]]Epochs: [[/label]] [[span id="epochValue"]]N/A[[/span]]
+      [[/div]]
+      [[div class="parameterDisplayItem"]]
+        [[label]]Batch Size: [[/label]] [[span id="batchSizeValue"]]N/A[[/span]]
+      [[/div]]
+      [[div class="parameterDisplayItem"]]
+        [[label]]Dropout Rate: [[/label]] [[span id="dropoutRateValue"]]N/A[[/span]]
+      [[/div]]
+      [[div class="parameterDisplayItem"]]
+        [[label]]Learning Rate: [[/label]] [[span id="learningRateValue"]]N/A[[/span]]
+      [[/div]]
+      [[div class="parameterDisplayItem"]]
+        [[label]]Activation Function: [[/label]] [[span id="activationFunctionValue"]]N/A[[/span]]
+      [[/div]]
+      [[div class="parameterDisplayItem"]]
+        [[label]]Hidden Layers: [[/label]] [[span id="hiddenLayersValue"]]N/A[[/span]]
+      [[/div]]
+       [[div class="parameterDisplayItem"]]
+       [[label]]Recency Decay: [[/label]] [[span id="recencyDecayValue"]]N/A[[/span]]
+       [[/div]]
+       [[div class="parameterDisplayItem"]]
+         [[label]]Latest Draw Date: [[/label]] [[span id="latestDrawDateValue"]]N/A[[/span]]
+      [[/div]]
+      [[h3]]Drawn Numbers Used for Analysis Up to and Including[[/h3]]
+      
+     [[p]]
+  Drawn Date: [[strong]]<?php echo $nearestDrawDate; ?>[[/strong]],
+  Draw Numbers: [[strong]]<?php
+    echo is_array($nearestDrawNumbers)
+      ? implode(', ', $nearestDrawNumbers)
+      : htmlspecialchars($nearestDrawNumbers, ENT_QUOTES, 'UTF-8');
+  ?>[[/strong]]
+[[/p]]
+[[/div]]
+
+    
+    [[div id="countdown" class="countdown"]]Estimated time: Calculating...[[/div]]
+    
+    [[div id="loading" class="loading" style="display: none;"]]
+      [[p id="funMessage" class="fun-message"]][[strong]]Humor Display:[[/strong]] Initializing...[[/p]]
+      [[p id="progressMessage"]][[strong]]System Status:[[/strong]] Initializing...[[/p]]
+      [[div class="spinner"]][[/div]]
+      [[div class="progress-bar-container"]]
+        [[div id="progressBar" class="progress-bar"]]0%[[/div]]
+      [[/div]]
+    [[/div]]
+    
+    [[div id="prediction" style="display: none;"]]
+      [[h3]]Top 20 Numbers by Likelihood[[/h3]]
+      [[div id="predictedNumbers"]][[/div]]
+    [[/div]]
+    
+    [[div class="breakdown-section" id="numberBreakdown" style="display: none;"]]
+      [[h3]]Number Probability Ranking[[/h3]]
+      [[div id="numberBreakdownTable"]][[/div]]
+    [[/div]]
+    
+    [[div id="backtestNotice" style="display: none; background: #ffffff; color: #000; padding: 15px; border-radius: 5px; margin-top: 20px; border: 1px solid #ccc;"]]
+      [[h4]]Backtesting in Progress...[[/h4]]
+      [[p]]The model is checking how well your chosen settings predict past draws. This typically takes 1 to 3 minutes. Your main results are already ready above.[[/p]]
+    [[/div]]
+    [[div id="backtestProgressContainer" style="display: none; margin-top: 10px;"]]
+      [[div id="backtestProgressBar" class="progress-bar"]]0%[[/div]]
+    [[/div]]
+    [[div id="backtestResults" style="display: none; margin-top: 20px;"]][[/div]]
+    
+    
+      <!-- SKAI Guided UX: Step 4 label - Review and Save -->
+      [[div class="skai-step-label" id="skai-step4-label"]]
+        [[span class="skai-step-badge"]]STEP 3[[/span]]
+        [[span class="skai-step-title"]]Review Your Numbers and Save[[/span]]
+        [[span class="skai-step-hint"]]Your analysis is complete[[/span]]
+      [[/div]]
+
+      <!-- SAVE PREDICTION SET FORM (Place this after your main analysis container) -->
+[[div id="saveFormContainer" style="background-color:#fff; border:1px solid rgba(127,141,170,0.25); border-radius:14px; padding:20px 24px; font-size:13px; max-width:500px; margin:20px auto; text-align:center; box-shadow:0 4px 16px rgba(10,26,51,0.08);"]]
+    [[h4 style="margin-bottom:6px; font-size:16px; font-weight:700; color:var(--skai-navy);"]]Save Your Prediction[[/h4]]
+    [[p style="font-size:0.8rem; color:var(--skai-slate); margin:0 0 12px 0;"]]Give it a label and save it to your LottoExpert dashboard.[[/p]]
+    [[form method="post" id="savePredictionForm" style="margin:0 auto;"]]
+      <?php echo JHtml::_('form.token'); ?>
+      [[input type="hidden" name="source" value="ai_prediction"]]
+      [[input type="hidden" name="lottery_id" value="<?php echo $lottery_id; ?>"]]
+      [[input type="hidden" name="main_numbers" id="saveMainNumbers"]]
+      [[input type="hidden" name="extra_ball_numbers" id="saveExtraBallNumbers"]]
+      [[input type="hidden" name="draws_analyzed" value="<?php echo $totalEntryCount; ?>"]]
+
+      [[input type="hidden" name="generated_at" id="saveGeneratedAt" value=""]]
+      [[input type="hidden" name="next_draw_date" id="saveNextDrawDate" value=""]]
+
+      [[input type="hidden" name="epochs" id="saveEpochs"]]
+      [[input type="hidden" name="batch_size" id="saveBatchSize"]]
+      [[input type="hidden" name="dropout_rate" id="saveDropoutRate"]]
+      [[input type="hidden" name="learning_rate" id="saveLearningRate"]]
+      [[input type="hidden" name="activation_function" id="saveActivationFunction"]]
+      [[input type="hidden" name="hidden_layers" id="saveHiddenLayers"]]
+      [[input type="hidden" name="recency_decay" id="saveRecencyDecay"]]
+      
+      [[label style="display:block; font-weight:bold; margin:6px 0 2px;"]]Label[[/label]]
+<?php $labelText = $lotteryName . " Prediction – " . date('M j, Y'); ?>
+[[input type="text" name="label" id="saveLabel" value="<?php echo htmlspecialchars($labelText); ?>" style="width:100%;"]]
+
+      <?php if ($userCanSave): ?>
+        [[button type="submit" name="save_set" style="margin-top:10px; padding:10px 22px; background-color:var(--skai-blue); color:#fff; border:none; border-radius:999px; font-weight:700; font-size:14px; cursor:pointer;"]]
+          Save to My LottoExpert
+        [[/button]]
+      <?php else: ?>
+        <?php if ($isEnthusiast && (string)$gameId !== $powerballGameId): ?>
+          [[p style="color:#888; font-style:italic; margin-top:10px; font-size:13px;"]]
+            Your Enthusiast plan can save predictions only for Powerball.
+          [[/p]]
+        <?php else: ?>
+          [[p style="color:#888; font-style:italic; margin-top:10px; font-size:13px;"]]
+            Log in to save predictions.
+          [[/p]]
+        <?php endif; ?>
+      <?php endif; ?>
+    [[/form]]
+[[/div]]
+
+  <!-- SKAI Persistent Help Strip -->
+  [[div class="skai-help-strip"]]
+    [[span class="skai-help-icon"]]?[[/span]]
+    [[span]]Not sure how to use this page?[[/span]]
+    [[a href="#skai-how-it-works" onclick="document.getElementById('skai-how-it-works').open=true; return true;"]]View the How It Works guide[[/a]]
+  [[/div]]
+
+    
+    
+    
+[[style]]
+  /* Unified SKAI layout for all insight sections (probability, AI explainer, wheeling) */
+
+  .lottery-analysis {
+    max-width: 960px;
+    margin: 32px auto;
+    padding: 0 16px 32px;
+    font-family: var(--system-stack);
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--skai-navy);
+  }
+
+  .lottery-analysis section {
+    margin-bottom: 24px;
+  }
+
+  .lottery-analysis h2 {
+    font-size: 2rem;         /* 32px */
+    line-height: 2.5rem;     /* 40px */
+    font-weight: 700;
+    margin-bottom: 1rem;
+    color: var(--skai-blue);
+    text-align:center;
+  }
+
+  .lottery-analysis h3 {
+    font-size: 1.25rem;      /* 20px */
+    line-height: 1.9rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    color: var(--skai-navy);
+  }
+
+  .lottery-analysis p {
+    margin-bottom: 0.9rem;
+    color: var(--skai-navy);
+  }
+
+  /* Core SKAI card used by all bottom sections */
+  .tile {
+    background-color: #ffffff;
+    border-radius: 16px;
+    padding: 24px 24px 20px;
+    margin: 24px 0;
+    box-shadow: 0 14px 36px rgba(10,26,51,0.12);
+    border: 1px solid rgba(127,141,170,0.22);
+  }
+
+  /* When a tile sits inside another tile (e.g., inner breakdown card), make it lighter */
+  .lottery-analysis .tile .tile {
+    background-color: #f7f8fc;
+    border-radius: 12px;
+    box-shadow: none;
+    border: 1px solid rgba(127,141,170,0.18);
+    margin: 16px 0 0;
+    padding: 16px 18px;
+  }
+
+  .tile table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+  }
+
+  .tile th,
+  .tile td {
+    padding: 10px 12px;
+    font-size: 0.875rem;     /* 14px */
+    line-height: 1.25rem;    /* 20px */
+    border-bottom: 1px solid rgba(127,141,170,0.25);
+    text-align: center;
+  }
+
+  .tile th {
+    background: var(--skai-blue);
+    color: #fff;
+  }
+
+  .tile tr:nth-child(even) {
+    background: #f9fbff;
+  }
+
+  .callout {
+    background: #f1f4fb;
+    padding: 12px 14px;
+    margin-bottom: 18px;
+    border-left: 4px solid var(--skai-blue);
+    font-size: 0.95rem;
+    line-height: 1.5;
+    border-radius: 10px;
+  }
+
+  .callout-alt {
+    border-left-color: var(--skai-amber);
+  }
+
+  /* Charts inside tiles – consistent aspect and breathing room */
+  .tile canvas {
+    width: 100% !important;
+    height: 240px !important;
+    display: block;
+    margin-top: 16px;
+  }
+
+  @media (max-width: 600px) {
+    .lottery-analysis {
+      padding: 0 12px 24px;
+    }
+    .tile {
+      margin: 16px 0;
+      padding: 18px 16px;
+    }
+    .tile canvas {
+      height: 200px !important;
+    }
+  }
+[[/style]]
+
+
+[[div class="lottery-analysis"]]
+
+  [[nav aria-label="LottoExpert AI analysis steps" style="display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin:16px auto 12px auto; font-size:0.9rem;"]]
+    [[span style="padding:4px 10px; border-radius:999px; background:#0A1A33; color:#ffffff; font-weight:600;"]]
+      Step 1 – Choose your coverage
+    [[/span]]
+    [[span style="padding:4px 10px; border-radius:999px; background:#1C66FF; color:#ffffff; font-weight:600;"]]
+      Step 2 – Run AI Analysis
+    [[/span]]
+    [[span style="padding:4px 10px; border-radius:999px; background:#EFEFF5; color:#0A1A33; border:1px solid #d0d5e5;"]]
+      Step 3 – Structure tickets with wheeling
+    [[/span]]
+  [[/nav]]
+
+  [[section class="tile"]]
+
+    [[h2 style="text-align:center; margin-bottom:15px; color:#1C66FF;"]]
+      Why Choose [[strong]]<?php echo $best['count'] ?>[[/strong]] Numbers?
+    [[/h2]]
+
+    [[p style="text-align:center; font-size:16px;"]]
+      Playing a lottery like <?php echo htmlspecialchars($lotteryName, ENT_QUOTES, 'UTF-8'); ?> can feel overwhelming.
+      You pick [[strong]]<?php echo $pickSize ?>[[/strong]] numbers from [[strong]]<?php echo $mainNumbersMax ?>[[/strong]]
+<?php if ($hasExtraBall): ?>
+      and [[strong]]<?php echo $numExtraBalls; ?> extra ball<?php echo $numExtraBalls > 1 ? 's' : ''; ?> from [[strong]]<?php echo $extraBallMax ?>[[/strong]].
+<?php endif; ?>
+      [[br]]
+      Did you know the chance of guessing the exact <?php echo $pickSize ?> numbers correctly is only
+      [[strong]]1 in <?php echo number_format($totalCombinations) ?>[[/strong]]?
+    [[/p]]
+
+    [[p style="text-align:center; font-size:18px; font-weight:bold; color:var(--skai-success);"]]
+      But if you choose [[strong]]<?php echo $best['count'] ?>[[/strong]] numbers, your chances improve dramatically to about:
+    [[/p]]
+
+    [[p style="text-align:center; font-size:22px; font-weight:bold; margin:10px 0; color:var(--skai-amber);"]]
+      1 in <?php echo number_format($best['odds']) ?>
+    [[/p]]
+
+    [[section class="tile"]]
+      [[h3 style="margin-top:0; color:var(--skai-blue);"]]Let's Break This Down Simply[[/h3]]
+
+      [[table style="width:100%; border-collapse:collapse; text-align:center; font-size:14px; margin-top:10px;"]]
+        [[thead]]
+          [[tr style="background-color:var(--skai-navy); color:#fff;"]]
+            [[th style="padding:5px;"]]Your Numbers[[/th]]
+            [[th style="padding:5px;"]]Ways to Match[[/th]]
+            [[th style="padding:5px;"]]Odds[[/th]]
+          [[/tr]]
+        [[/thead]]
+        [[tbody]]
+          <?php foreach ($stats as $row): ?>
+            [[tr style="<?php echo $row['count']==$best['count']
+                          ? 'font-weight:bold;background-color:#e9f5f3;'
+                          : '';?>"]]
+              [[td style="padding:5px;"]]<?php echo $row['count'] ?> numbers[[/td]]
+              [[td]]<?php echo number_format($row['ways']) ?> ways[[/td]]
+              [[td]]1 in <?php echo number_format($row['odds']) ?>[[/td]]
+            [[/tr]]
+          <?php endforeach; ?>
+        [[/tbody]]
+      [[/table]]
+
+      [[figure style="margin-top:10px; text-align:center;"]]
+        [[canvas id="coverageChart" width="300" height="150" style="max-width:100%;"]][[/canvas]]
+        [[figcaption style="font-size:0.8rem; color:#555; margin-top:5px;"]]
+          More numbers = better coverage!
+        [[/figcaption]]
+      [[/figure]]
+
+      [[p style="font-size:0.9rem; color:#555; margin-top:10px;"]]
+        Notice each time you add more numbers, your coverage increases.
+        Choosing <?php echo $best['count'] ?> numbers gives you the best balance
+        between odds and cost.
+      [[/p]]
+    [[/section]]
+
+  [[/section]]
+[[/div]]
+
+
+
+[[section class="tile mdc-card mdc-elevation--z1" role="region" aria-labelledby="ai-prediction-title" style="padding:24px; margin-top:24px;"]]
+  
+  [[h2 id="ai-prediction-title" class="mdc-typography--headline5" style="margin-bottom:4px; color:var(--primary-blue); text-align:center;"]]
+    Step 2 – How the LottoExpert AI Engine Analyzes the Numbers
+  [[/h2]]
+
+  [[p class="mdc-typography--body1" style="margin-bottom:20px; line-height:1.6; text-align:center; max-width:640px; margin-left:auto; margin-right:auto;"]]
+    This section shows, in plain language, how the LottoExpert AI Engine — our original prediction system, developed by LottoExpert.net — analyzes past draws and turns them into probability-based recommendations. No “magic,” no hype – just measured, transparent machine-learning.
+  [[/p]]
+
+  [[div class="step" style="margin-bottom:20px;"]]
+    [[h3 class="mdc-typography--subtitle1" style="margin-bottom:6px; color:var(--text-main);"]]
+      1. Gathering Clean, Reliable Data
+    [[/h3]]
+    [[p class="mdc-typography--body1" style="line-height:1.6;"]]
+      The LottoExpert AI Engine starts with a verified history of past draws from our secure database. Each record includes:[[br/]]
+      [[strong]]Winning numbers:[[/strong]] the actual numbers drawn in each game.[[br/]]
+      [[strong]]Draw dates:[[/strong]] when each drawing took place.[[br/]]
+      [[strong]]Jackpot amounts:[[/strong]] prize size when available.[[br/]]
+      [[strong]]Bonus-ball details:[[/strong]] Powerball, EuroMillions stars, or other extra balls. [[br/]][[br/]]
+      Automated checks look for duplicates, missing values, and format issues, so the model learns from consistent, trustworthy data.
+    [[/p]]
+  [[/div]]
+
+  [[div class="step" style="margin-bottom:20px;"]]
+    [[h3 class="mdc-typography--subtitle1" style="margin-bottom:6px; color:var(--text-main);"]]
+      2. Preparing the Data for Learning
+    [[/h3]]
+    [[p class="mdc-typography--body1" style="line-height:1.6;"]]
+      Raw draws are transformed into features the model can understand:[[br/]]
+      [[strong]]Normalization:[[/strong]] values are scaled so different ranges are comparable.[[br/]]
+      [[strong]]Vector encoding:[[/strong]] each draw becomes a consistent numeric “snapshot.”[[br/]]
+      [[strong]]Outlier checks:[[/strong]] unusual records are reviewed and, if needed, excluded.[[br/]]
+      [[strong]]Time-based features:[[/strong]] our engine derives patterns like gaps between repeats and rolling averages over recent draws.
+    [[/p]]
+  [[/div]]
+
+  [[div class="step" style="margin-bottom:20px;"]]
+    [[h3 class="mdc-typography--subtitle1" style="margin-bottom:6px; color:var(--text-main);"]]
+      3. Training the Neural Network
+    [[/h3]]
+    [[p class="mdc-typography--body1" style="line-height:1.6;"]]
+      The LottoExpert AI Engine uses a deep neural network, tuned through a few key settings:
+    [[/p]]
+    [[dl style="margin-left:16px; line-height:1.6;"]]
+      [[dt]][[strong]]Epochs:[[/strong]][[/dt]]
+      [[dd]]How many full passes the model makes through the data. More epochs allow deeper learning, up to a point.[[/dd]]
+
+      [[dt]][[strong]]Batch size:[[/strong]][[/dt]]
+      [[dd]]How many past draws the model processes at once before updating itself. This balances speed and stability.[[/dd]]
+
+      [[dt]][[strong]]Dropout rate:[[/strong]][[/dt]]
+      [[dd]]A fraction of “turned-off” neurons during training that helps prevent overfitting and keeps the model honest.[[/dd]]
+
+      [[dt]][[strong]]Learning rate:[[/strong]][[/dt]]
+      [[dd]]How big a step the model takes when it learns from an error. Too high can be unstable; too low slows improvement.[[/dd]]
+
+      [[dt]][[strong]]Activation function:[[/strong]][[/dt]]
+      [[dd]]Non-linear functions (ReLU, Sigmoid, Tanh) that let the network capture more than simple straight-line trends.[[/dd]]
+
+      [[dt]][[strong]]Hidden layers:[[/strong]][[/dt]]
+      [[dd]]Stacked layers that move from basic frequencies to more subtle co-occurrence patterns between numbers.[[/dd]]
+    [[/dl]]
+    [[p class="mdc-typography--caption" style="margin-top:8px; color:var(--text-muted); font-style:italic;"]]
+      A built-in validation split monitors for overfitting. If the validation quality stops improving, we adjust epochs, dropout, or other settings.
+    [[/p]]
+  [[/div]]
+
+  [[div class="step" style="margin-bottom:20px;"]]
+    [[h3 class="mdc-typography--subtitle1" style="margin-bottom:6px; color:var(--text-main);"]]
+      4. Turning Patterns into Probabilities
+    [[/h3]]
+    [[p class="mdc-typography--body1" style="line-height:1.6;"]]
+      After training, the LottoExpert AI Engine assigns a probability score to every possible number. From there, it:[[br/]]
+      [[strong]]Ranks:[[/strong]] orders all numbers from most to least likely, based on the learned patterns.[[br/]]
+      [[strong]]Selects:[[/strong]] chooses the top candidates (for example, 5 main numbers plus any required bonus balls) for your analysis view.
+    [[/p]]
+  [[/div]]
+
+  [[div class="step" style="margin-bottom:20px;"]]
+    [[h3 class="mdc-typography--subtitle1" style="margin-bottom:6px; color:var(--text-main);"]]
+      5. Backtesting (Optional, but Recommended)
+    [[/h3]]
+    [[p class="mdc-typography--body1" style="line-height:1.6;"]]
+      Before you trust any settings, you can replay them on past draws:[[br/]]
+      [[strong]]Configure:[[/strong]] pick how many draws to test and which metrics you care about (hits, matches, or custom rules).[[br/]]
+      [[strong]]Review:[[/strong]] compare actual vs. predicted results to see how that configuration behaved historically.
+    [[/p]]
+  [[/div]]
+
+  [[div class="step" style="margin-bottom:20px;"]]
+    [[h3 class="mdc-typography--subtitle1" style="margin-bottom:6px; color:var(--text-main);"]]
+      6. Realistic, Responsible Use
+    [[/h3]]
+    [[p class="mdc-typography--body1" style="line-height:1.6;"]]
+      The LottoExpert AI Engine narrows the field compared with picking numbers at random, but it cannot remove luck from the equation. Treat these insights as structured guidance, not a guarantee. Set a budget, stick to it, and play for enjoyment first.
+    [[/p]]
+  [[/div]]
+
+  [[p class="mdc-typography--caption" style="margin-top:16px; color:var(--text-muted); text-align:center;"]]
+    Built with ISO 9241-210 human-centered principles, W3C accessibility guidelines, and modern Material Design patterns – so the experience stays clear, ethical, and easy to use.
+  [[/p]]
+
+[[/section]]
+
+
+
+  [[section class="tile"]]
+    [[h3 style="margin-top:0; color:var(--skai-blue);"]]
+      Step 3 – Use Wheeling to Spread Your Coverage
+    [[/h3]]
+
+    [[p]]
+      Wheeling takes a set of smart numbers – for example, the [[strong]]20[[/strong]] numbers our AI engine highlights – and spreads them across multiple tickets in an organized way. Instead of relying on a single line, you cover more combinations from the same pool.
+    [[/p]]
+
+    [[table style="width:100%; border-collapse:collapse; text-align:center; font-size:14px; margin-top:10px;"]]
+      [[tbody]]
+        [[tr]]
+          [[td style="padding:5px; background-color:#f0f4f8;"]]Full wheel (19 numbers)[[/td]]
+          [[td]]11,628 tickets[[/td]]
+        [[/tr]]
+        [[tr]]
+          [[td style="padding:5px; background-color:#f0f4f8;"]]Reduced wheel (19 numbers)[[/td]]
+          [[td]]28 tickets[[/td]]
+        [[/tr]]
+        [[tr]]
+          [[td style="padding:5px; background-color:#f0f4f8;"]]Guarantee[[/td]]
+          [[td]]At least 3 numbers matched (if your pool hits)[[/td]]
+        [[/tr]]
+        [[tr]]
+          [[td style="padding:5px; background-color:#f0f4f8;"]]Example cost (at $2 per ticket)[[/td]]
+          [[td]]$56 total[[/td]]
+        [[/tr]]
+      [[/tbody]]
+    [[/table]]
+
+    [[p]]
+      In plain terms, wheeling is a way to give your chosen numbers more “coverage” without needing to buy thousands of random tickets. You decide how many combinations fit your budget, and the wheel fills them in systematically.
+    [[/p]]
+
+    [[figure style="margin-top:10px; text-align:center;"]]
+      [[canvas id="ticketsChart" width="300" height="150" style="max-width:100%;"]][[/canvas]]
+      [[figcaption style="font-size:0.8rem; color:#555; margin-top:5px;"]]
+        Full wheel vs. reduced wheel – similar coverage, far fewer tickets.
+      [[/figcaption]]
+    [[/figure]]
+
+  [[/section]]
+
+  [[div style="margin-top:15px; background-color:#eafaf1; padding:10px; border-radius:6px; border-left:4px solid #2a9d8f; font-size:0.9rem;"]]
+    [[strong style="color:var(--skai-navy);"]]Practical tip:[[br]][[/strong]]
+    Let the LottoExpert AI Engine narrow the field to your best numbers, then apply a reduced wheel that fits your budget. This keeps your play structured, not scattered.
+  [[/div]]
+
+  [[div style="margin-top:10px; background-color:#e9f1fa; padding:10px; border-radius:6px; border-left:4px solid #2b7ae4; font-size:0.9rem;"]]
+    [[strong style="color:var(--skai-navy);"]]Perspective:[[br]][[/strong]]
+    A 20-number selection can represent 15,504 different 5-number combinations. Wheeling does not guarantee a prize, but it can help you touch more of that space in a disciplined way.
+  [[/div]]
+
+  [[p style="margin-top:15px; font-style:italic; color:#555; font-size:0.9rem;"]]
+    [[strong]]Important:[[br]][[/strong]]
+    Lotteries always involve risk. The LottoExpert AI Engine and wheeling strategies are designed to help you play more thoughtfully, not to promise outcomes. Set clear limits, play within them, and treat any win as a positive surprise – not an expectation.
+  [[/p]]
+
+
+
+
+
+
+  
+  [[script defer]]
+    document.addEventListener('DOMContentLoaded', function() {
+      // ── ES5 compatibility helpers ──────────────────────────────────
+      // Replaces Array.prototype.fill (ES6)
+      function skaiArrayFill(n, val) {
+        var arr = [];
+        for (var _i = 0; _i < n; _i++) { arr.push(val); }
+        return arr;
+      }
+      // Replaces Array.from (ES6) for array-like objects
+      function skaiArrayFrom(arrayLike) {
+        var arr = [];
+        for (var _i = 0; _i < arrayLike.length; _i++) { arr.push(arrayLike[_i]); }
+        return arr;
+      }
+      // Replaces new Set(arr) (ES6) - returns plain object lookup
+      function skaiMakeSet(arr) {
+        var obj = {};
+        for (var _i = 0; _i < arr.length; _i++) { obj[arr[_i]] = true; }
+        return obj;
+      }
+      // Replaces Set.prototype.has (ES6)
+      function skaiSetHas(obj, val) { return obj[val] === true; }
+      // ── end ES5 helpers ─────────────────────────────────────────────
+
+        function convertSorcererSyntaxToHTML(str) {
+  return str.replace(/\[\[/g, '<').replace(/\]\]/g, '>');
+}
+
+
+// --- BEGIN: Define renderBacktestResults FIRST --- 
+// ── UPDATED renderBacktestResults ──
+function renderBacktestResults(results) {
+  var tableHTML =
+    '[[style]]' +
+    '.backtest-table{width:100%;border-collapse:collapse;margin-top:20px;}' +
+    '.backtest-table th,.backtest-table td{border:1px solid #ccc;padding:8px;text-align:center;}' +
+    '.backtest-table th{background-color:#3498db;color:#fff;}' +
+    '[[/style]]' +
+    '[[table class="backtest-table"]]' +
+    '[[thead]][[tr]]' +
+    '[[th]]Draw Date[[/th]]' +
+    '[[th]]Actual Main Numbers[[/th]]' +
+    '[[th]]Actual Extra Ball(s)[[/th]]' +
+    '[[th]]Predicted Main Numbers (Top 20)[[/th]]' +
+    '[[th]]Predicted Extra Ball(s)[[/th]]' +
+    '[[th]]Main Match Count[[/th]]' +
+    '[[th]]Extra Match Count[[/th]]' +
+    '[[/tr]][[/thead]]' +
+    '[[tbody]]';
+
+  results.forEach(function(r) {
+    tableHTML +=
+      '[[tr]]' +
+      '[[td]]' + r.date + '[[/td]]' +
+      '[[td]]' + r.actualMain + '[[/td]]' +
+      '[[td]]' + (r.actualExtra.length ? r.actualExtra.join(', ') : '–') + '[[/td]]' +
+      '[[td]]' + r.predictedMain + '[[/td]]' +
+      '[[td]]' + (r.predictedExtra.length ? r.predictedExtra.join(', ') : '–') + '[[/td]]' +
+      '[[td]]' + r.mainMatchCount + '[[/td]]' +
+      '[[td]]' + r.extraMatchCount + '[[/td]]' +
+      '[[/tr]]';
+  });
+
+  tableHTML += '[[/tbody]][[/table]]';
+
+  // Proper scoring summary (if present)
+  if (results && results.skaiSummary) {
+    var s = results.skaiSummary;
+    tableHTML +=
+      '[[div style="margin-top:12px; padding:10px; border:1px solid #ccc; border-radius:6px; text-align:left;"]]' +
+      '[[div style="font-weight:700; margin-bottom:6px;"]]LottoExpert AI Backtest Summary[[/div]]' +
+      '[[div]]Steps: ' + s.steps + '[[/div]]' +
+      '[[div]]Main: Avg Expected Mass (in picks): ' + Number(s.avgExpectedMassMain).toFixed(4) + '[[/div]]' +
+      '[[div]]Main: Avg Brier (lower better): ' + Number(s.avgBrierMain).toFixed(6) + '[[/div]]' +
+      '[[div]]Main: Avg LogLoss (lower better): ' + Number(s.avgLogLossMain).toFixed(6) + '[[/div]]' +
+      '[[div]]Extra: Avg Expected Mass (in picks): ' + Number(s.avgExpectedMassExtra).toFixed(4) + '[[/div]]' +
+      '[[div]]Extra: Avg Brier (lower better): ' + Number(s.avgBrierExtra).toFixed(6) + '[[/div]]' +
+      '[[div]]Extra: Avg LogLoss (lower better): ' + Number(s.avgLogLossExtra).toFixed(6) + '[[/div]]' +
+      '[[/div]]';
+  }
+
+  return tableHTML;
+}
+      // --- END: renderBacktestResults ---
+
+
+
+      // Prevent any accidental form submission
+      var predictionForm = document.getElementById('predictionForm');
+      if (predictionForm) {
+        predictionForm.addEventListener('submit', function(e) {
+          e.preventDefault();
+        });
+      }
+      
+      var draws = <?php echo json_encode($draws); ?>;
+      console.log("All Draws:", draws);
+      // Lottery parameters
+      var mainNumbersMax = <?php echo $mainNumbersMax; ?>;
+      var pickSize = <?php echo $pickSize; ?>;
+      var hasExtraBall = <?php echo $hasExtraBall ? 'true' : 'false'; ?>;
+      var numExtraBalls   = <?php echo $numExtraBalls; ?>;
+      var extraBallMax = <?php echo $extraBallMax !== null ? $extraBallMax : 'null'; ?>;
+      var topExtraSuggestions = 5;
+        
+        
+      // Normalize data function
+      function normalizeData(data) {
+        return data.map(function(arr) {
+          return arr.map(function(num, index) {
+            if (index < pickSize) {
+              return num / mainNumbersMax;
+            } else if (hasExtraBall && extraBallMax !== null) {
+              return num / extraBallMax;
+            } else {
+              return num;
+            }
+          });
+        });
+      }
+      
+      var predictionDiv = document.getElementById('prediction');
+      var loadingDiv = document.getElementById('loading');
+      var numberBreakdownDiv = document.getElementById('numberBreakdown');
+      var progressBar = document.getElementById('progressBar');
+      var progressMessage = document.getElementById('progressMessage');
+      var startButton = document.getElementById('startPrediction');
+      var countdownDiv = document.getElementById('countdown');
+      var funMessageDiv = document.getElementById('funMessage');
+      var predictedNumbersDiv = document.getElementById('predictedNumbers');
+      var numberBreakdownTableDiv = document.getElementById('numberBreakdownTable');
+
+      var backtestNoticeDiv = document.getElementById('backtestNotice');
+      var backtestResultsDiv = document.getElementById('backtestResults');
+      var backtestProgressContainer = document.getElementById('backtestProgressContainer');
+      var backtestProgressBar = document.getElementById('backtestProgressBar');
+      var epochsInput = document.getElementById('epochs');
+      var batchSizeInput = document.getElementById('batchSize');
+      var dropoutRateInput = document.getElementById('dropoutRate');
+      var latestDrawDateInput = document.getElementById('latestDrawDate');
+      var learningRateInput = document.getElementById('learningRate');
+      var activationFunctionInput = document.getElementById('activationFunction');
+      var hiddenLayersInput = document.getElementById('hiddenLayers');
+      var enableBacktestCheckbox = document.getElementById('enableBacktest');
+
+      // Live λ (recency decay) readout
+      var recencyDecayInput = document.getElementById('recencyDecay');
+      var recencyDecayLambdaReadout = document.getElementById('recencyDecayLambdaReadout');
+
+      // PATCH 7B-1: Live blend readout (AI λ vs Skip 1-λ, plus β and T)
+      var skaiBlendReadoutEl = document.getElementById('skaiBlendReadout');
+
+      function skaiFmt2(n) {
+        var x = parseFloat(n);
+        if (!isFinite(x)) { x = 0; }
+        return x.toFixed(2);
+      }
+
+      function skaiClamp01(x) {
+        var n = parseFloat(x);
+        if (!isFinite(n)) { n = 0; }
+        return Math.max(0, Math.min(1, n));
+      }
+
+      function skaiUpdateBlendReadout(modeKey, lambda, beta, tempT) {
+        if (!skaiBlendReadoutEl) { return; }
+        var lam = skaiClamp01(lambda);
+        var skip = 1 - lam;
+        skaiBlendReadoutEl.textContent =
+          'Mode: ' + String(modeKey || 'balanced') +
+          ' • AI weight: ' + skaiFmt2(lam) +
+          ' • Skip weight: ' + skaiFmt2(skip) +
+          ' • Sharpness: ' + skaiFmt2(beta) +
+          ' • Temp: ' + skaiFmt2(tempT);
+      }
+
+      function formatLambda(val) {
+        var n = parseFloat(val);
+        if (isNaN(n)) { n = 1.0; }
+        n = Math.max(0, Math.min(1, n));
+        return n.toFixed(2);
+      }
+
+      function syncLambdaReadout() {
+        if (!recencyDecayInput || !recencyDecayLambdaReadout) {
+          return;
+        }
+        recencyDecayLambdaReadout.textContent = formatLambda(recencyDecayInput.value);
+      }
+
+      // Initialize and keep in sync while editing
+      if (recencyDecayInput) {
+        recencyDecayInput.addEventListener('input', syncLambdaReadout);
+        recencyDecayInput.addEventListener('change', syncLambdaReadout);
+      }
+      syncLambdaReadout();
+
+      // Guard so a missing checkbox can't break the whole script (and kill the progress bar)
+      if (enableBacktestCheckbox) {
+        enableBacktestCheckbox.addEventListener('change', function() {
+          var numDrawsSelect = document.getElementById('numDrawsBacktest');
+          if (numDrawsSelect) {
+            numDrawsSelect.disabled = !this.checked;
+          }
+        });
+      }
+
+  // ---- SKAI Mode Presets (Option B – game-aware) ----
+  var skaiGameType = '<?php echo $skaiGameType; ?>'; // 'jackpot', 'pick5', 'daily', 'multiExtra'
+
+  // Capture base values from JSON config as "Balanced" anchors
+  function safeNumber(val, fallback) {
+    var n = parseFloat(val);
+    return isNaN(n) ? fallback : n;
+  }
+
+  var baseEpochs      = safeNumber(epochsInput && epochsInput.value,      200);
+  var baseBatch       = safeNumber(batchSizeInput && batchSizeInput.value,32);
+  var baseDropout     = safeNumber(dropoutRateInput && dropoutRateInput.value,0.2);
+  var baseLR          = safeNumber(learningRateInput && learningRateInput.value,0.001);
+  var baseLayers      = safeNumber(hiddenLayersInput && hiddenLayersInput.value,2);
+  var baseRecency     = safeNumber(document.getElementById('recencyDecay') && document.getElementById('recencyDecay').value,1.0);
+
+  function clamp(val, min, max) {
+    return Math.max(min, Math.min(max, val));
+  }
+
+  function buildPresetsForGameType(gameType) {
+    var presets = {};
+
+    if (gameType === 'daily') {
+      // Pick 3 / Pick 4 – very fast-moving patterns
+      presets.balanced = {
+        epochs:      clamp(baseEpochs, 50, 500),
+        batch:       clamp(baseBatch, 16, 128),
+        dropout:     clamp(baseDropout, 0.15, 0.35),
+        lr:          clamp(baseLR, 0.0005, 0.01),
+        recency:     clamp(baseRecency || 0.90, 0.70, 1.0),
+        layers:      clamp(baseLayers, 1, 3)
+      };
+      presets.explorative = {
+        epochs:      clamp(baseEpochs * 1.3, 100, 800),
+        batch:       clamp(baseBatch, 16, 128),
+        dropout:     clamp(baseDropout - 0.05, 0.05, 0.3),
+        lr:          clamp(baseLR * 1.3, 0.0005, 0.02),
+        recency:     0.75,
+        layers:      clamp(baseLayers + 1, 2, 4)
+      };
+      presets.conservative = {
+        epochs:      clamp(baseEpochs * 0.7, 30, 400),
+        batch:       clamp(baseBatch, 16, 128),
+        dropout:     clamp(baseDropout + 0.05, 0.2, 0.5),
+        lr:          clamp(baseLR * 0.7, 0.0001, 0.005),
+        recency:     0.98,
+        layers:      clamp(baseLayers, 1, 3)
+      };
+    } else if (gameType === 'pick5') {
+      // 5-number games without extra ball
+      presets.balanced = {
+        epochs:      clamp(baseEpochs, 100, 800),
+        batch:       clamp(baseBatch, 32, 256),
+        dropout:     clamp(baseDropout, 0.15, 0.35),
+        lr:          clamp(baseLR, 0.0005, 0.01),
+        recency:     clamp(baseRecency || 0.94, 0.80, 1.0),
+        layers:      clamp(baseLayers, 2, 4)
+      };
+      presets.explorative = {
+        epochs:      clamp(baseEpochs * 1.3, 150, 1200),
+        batch:       clamp(baseBatch, 32, 256),
+        dropout:     clamp(baseDropout - 0.05, 0.1, 0.3),
+        lr:          clamp(baseLR * 1.3, 0.0005, 0.02),
+        recency:     0.85,
+        layers:      clamp(baseLayers + 1, 3, 5)
+      };
+      presets.conservative = {
+        epochs:      clamp(baseEpochs * 0.75, 80, 600),
+        batch:       clamp(baseBatch, 32, 256),
+        dropout:     clamp(baseDropout + 0.05, 0.2, 0.45),
+        lr:          clamp(baseLR * 0.7, 0.0001, 0.005),
+        recency:     0.97,
+        layers:      clamp(baseLayers, 2, 4)
+      };
+    } else if (gameType === 'multiExtra') {
+      // EuroMillions-style (two extra balls)
+      presets.balanced = {
+        epochs:      clamp(baseEpochs, 200, 1000),
+        batch:       clamp(baseBatch, 32, 256),
+        dropout:     clamp(baseDropout, 0.15, 0.35),
+        lr:          clamp(baseLR, 0.0003, 0.008),
+        recency:     clamp(baseRecency || 0.93, 0.80, 1.0),
+        layers:      clamp(baseLayers, 2, 5)
+      };
+      presets.explorative = {
+        epochs:      clamp(baseEpochs * 1.4, 300, 1500),
+        batch:       clamp(baseBatch, 32, 256),
+        dropout:     clamp(baseDropout - 0.05, 0.1, 0.3),
+        lr:          clamp(baseLR * 1.2, 0.0004, 0.012),
+        recency:     0.86,
+        layers:      clamp(baseLayers + 1, 3, 6)
+      };
+      presets.conservative = {
+        epochs:      clamp(baseEpochs * 0.7, 120, 900),
+        batch:       clamp(baseBatch, 32, 256),
+        dropout:     clamp(baseDropout + 0.05, 0.2, 0.45),
+        lr:          clamp(baseLR * 0.7, 0.0001, 0.005),
+        recency:     0.97,
+        layers:      clamp(baseLayers, 2, 5)
+      };
+    } else {
+      // Jackpot-style (Powerball, Mega Millions, large pick-6 etc.)
+      presets.balanced = {
+        epochs:      clamp(baseEpochs, 200, 1200),
+        batch:       clamp(baseBatch, 32, 256),
+        dropout:     clamp(baseDropout, 0.15, 0.35),
+        lr:          clamp(baseLR, 0.0003, 0.008),
+        recency:     clamp(baseRecency || 0.95, 0.85, 1.0),
+        layers:      clamp(baseLayers, 2, 5)
+      };
+      presets.explorative = {
+        epochs:      clamp(baseEpochs * 1.4, 300, 1600),
+        batch:       clamp(baseBatch, 32, 256),
+        dropout:     clamp(baseDropout - 0.05, 0.1, 0.3),
+        lr:          clamp(baseLR * 1.2, 0.0004, 0.012),
+        recency:     0.88,
+        layers:      clamp(baseLayers + 1, 3, 6)
+      };
+      presets.conservative = {
+        epochs:      clamp(baseEpochs * 0.7, 150, 900),
+        batch:       clamp(baseBatch, 32, 256),
+        dropout:     clamp(baseDropout + 0.05, 0.2, 0.45),
+        lr:          clamp(baseLR * 0.7, 0.0001, 0.005),
+        recency:     0.98,
+        layers:      clamp(baseLayers, 2, 5)
+      };
+    }
+
+    return presets;
+  }
+
+  var skaiPresets = buildPresetsForGameType(skaiGameType);
+  var modeButtons = document.querySelectorAll('.skai-mode-btn');
+  var modeDesc    = document.getElementById('skaiModeDescription');
+
+function describeMode(modeKey) {
+  // New SKAI blend modes (game-agnostic explanations)
+  if (modeKey === 'mixed') {
+    return 'Mixed mode dynamically blends AI-driven probabilities with Skip & Hit behavior. When both signals agree, the AI engine leans confidently; when they diverge, it adapts conservatively to reduce instability.';
+  }
+
+  if (modeKey === 'ai-forward') {
+    return 'AI-forward mode prioritizes the neural network’s learned probability structure, relying less on Skip patterns and more on learned sequence behavior.';
+  }
+
+  if (modeKey === 'skip-dominant') {
+    return 'Skip-dominant mode places stronger emphasis on Skip & Hit dynamics, favoring numbers that statistical gap behavior suggests may be due.';
+  }
+
+  // Original per-game-type messaging for Balanced / Explorative / Conservative
+  var text = '';
+
+  if (skaiGameType === 'daily') {
+    if (modeKey === 'balanced') {
+      text = 'Balanced mode is tuned for daily games, mixing long-term behavior with recent movement for steady play.';
+    } else if (modeKey === 'explorative') {
+      text = 'Explorative mode leans harder into recent shifts for daily games, intentionally exploring more variation.';
+    } else {
+      text = 'Conservative mode stays closer to stable daily-game tendencies, avoiding sharp swings from recent draws.';
+    }
+  } else if (skaiGameType === 'pick5') {
+    if (modeKey === 'balanced') {
+      text = 'Balanced mode is tuned for steady Pick 5 play, mixing long-term history with recent movements.';
+    } else if (modeKey === 'explorative') {
+      text = 'Explorative mode looks harder at recent gaps and co-occurrences in Pick 5, to highlight evolving patterns.';
+    } else {
+      text = 'Conservative mode keeps Pick 5 analysis closer to long-term averages, moderating swings from recent draws.';
+    }
+  } else if (skaiGameType === 'multiExtra') {
+    if (modeKey === 'balanced') {
+      text = 'Balanced mode is tuned for multi-extra games, combining long-term structure with controlled recency bias.';
+    } else if (modeKey === 'explorative') {
+      text = 'Explorative mode leans into short-term movement for multi-extra games, exploring more aggressively while staying coherent.';
+    } else {
+      text = 'Conservative mode emphasizes stable long-term behavior for multi-extra games, reducing volatility from recent draws.';
+    }
+  } else {
+    // Jackpot-style default
+    if (modeKey === 'balanced') {
+      text = 'Balanced mode uses steady, well-rounded settings designed for everyday play.';
+    } else if (modeKey === 'explorative') {
+      text = 'Explorative mode chases recent patterns more aggressively and allows greater variation.';
+    } else {
+      text = 'Conservative mode stays closer to long-term historical behavior and avoids sharp swings.';
+    }
+  }
+
+  return text;
+}
+
+  function applyPreset(modeKey) {
+    // Fallback: new SKAI blend modes (mixed / ai-forward / skip-dominant) should still
+    // apply a reasonable training preset rather than doing nothing.
+    var preset = skaiPresets[modeKey] || skaiPresets.balanced;
+    if (!preset) {
+      return;
+    }
+
+    if (epochsInput)         { epochsInput.value = Math.round(preset.epochs); }
+    if (batchSizeInput)      { batchSizeInput.value = Math.round(preset.batch); }
+    if (dropoutRateInput)    { dropoutRateInput.value = preset.dropout.toFixed(2); }
+    if (learningRateInput)   { learningRateInput.value = preset.lr.toFixed(5); }
+    if (hiddenLayersInput)   { hiddenLayersInput.value = Math.round(preset.layers); }
+    var recencyInput = document.getElementById('recencyDecay');
+    if (recencyInput)        { recencyInput.value = preset.recency.toFixed(2); }
+
+    if (modeDesc) {
+      modeDesc.textContent = describeMode(modeKey);
+    }
+  }
+
+  if (modeButtons && modeButtons.length) {
+    for (var i = 0; i < modeButtons.length; i++) {
+      modeButtons[i].addEventListener('click', function (e) {
+        var chosen = this.getAttribute('data-skai-mode') || 'balanced';
+
+        for (var j = 0; j < modeButtons.length; j++) {
+          var pressed = modeButtons[j].getAttribute('data-skai-mode') === chosen;
+          modeButtons[j].setAttribute('aria-pressed', pressed ? 'true' : 'false');
+        }
+
+                applyPreset(chosen);
+
+        // PATCH 7B-2: update blend readout immediately on mode change
+        var betaNow = (typeof getSkaiSkipBeta === 'function') ? getSkaiSkipBeta(chosen) : 2.0;
+        var tNow = (typeof skaiGetStoredTemp === 'function') ? skaiGetStoredTemp(chosen) : 1.0;
+
+        // Before a prediction runs, Mixed has no agreement info yet; show a sensible baseline.
+        var lamNow = (chosen === 'mixed')
+          ? 0.65
+          : ((typeof getSkaiBlendLambda === 'function') ? getSkaiBlendLambda(chosen) : 0.65);
+
+        skaiUpdateBlendReadout(chosen, lamNow, betaNow, tNow);
+
+      });
+    }
+
+    // Ensure Balanced preset is applied on load so inputs match explanatory text
+        applyPreset('balanced');
+
+    // PATCH 7B-2 (load): initialize blend readout to match the default mode
+    if (typeof skaiUpdateBlendReadout === 'function') {
+      var betaInit = (typeof getSkaiSkipBeta === 'function') ? getSkaiSkipBeta('balanced') : 2.0;
+      var tInit = (typeof skaiGetStoredTemp === 'function') ? skaiGetStoredTemp('balanced') : 1.0;
+      skaiUpdateBlendReadout('balanced', 0.65, betaInit, tInit);
+    }
+
+  }
+  // ---- END SKAI Mode Presets ----
+
+  // --- 9-Combo Batch: expose applyPreset and define skaiApplyCombo ---
+  window.skaiApplyPreset = applyPreset;
+  window.skaiApplyCombo = function (profile, strategy) {
+    // Map SKAI strategy → Master data-skai-mode
+    var stratMap = { ai: 'ai-forward', hybrid: 'mixed', skip: 'skip-dominant' };
+    var stratMode = stratMap[strategy] || strategy;
+    // Step 1: click strategy mode button (updates aria-pressed for getSelectedSkaiMode())
+    var stratBtn = document.querySelector('[data-skai-mode="' + stratMode + '"]');
+    if (stratBtn && typeof stratBtn.click === 'function') { stratBtn.click(); }
+    // Step 2: re-apply profile training params without touching aria-pressed
+    if (typeof applyPreset === 'function') { applyPreset(profile); }
+  };
+
+      /* PATCH: Disabled legacy SKAI preset system (duplicate listeners / conflicting behavior).
+         The active system is the newer:
+         // ---- SKAI Mode Presets (Option B – game-aware) ----
+         above this block.
+      // === SKAI Mode Presets (Balanced / Explorative / Conservative) ===
+      var skaiModeButtons = document.querySelectorAll('.skai-mode-btn');
+      var skaiModeDescription = document.getElementById('skaiModeDescription');
+
+      // Base values from PHP config (per game)
+      var baseEpochs        = <?php echo (int) $epochs; ?>;
+      var baseBatchSize     = <?php echo (int) $batchSize; ?>;
+      var baseDropout       = <?php echo (float) $dropoutRate; ?>;
+      var baseLearningRate  = <?php echo (float) $learningRate; ?>;
+      var baseHiddenLayers  = <?php echo (int) $hiddenLayers; ?>;
+      var baseRecencyDecay  = <?php
+        $rd = isset($gameConfig['recencyDecay']) ? (float) $gameConfig['recencyDecay'] : 1.0;
+        echo $rd;
+      ?>;
+
+      // Helper to clamp values into safe ranges
+      function clampValue(val, min, max) {
+        if (val < min) { return min; }
+        if (val > max) { return max; }
+        return val;
+      }
+
+      function applySkaiPreset(mode) {
+        var e = baseEpochs;
+        var b = baseBatchSize;
+        var d = baseDropout;
+        var lr = baseLearningRate;
+        var h = baseHiddenLayers;
+        var rd = baseRecencyDecay;
+        var desc = '';
+
+        if (mode === 'balanced') {
+          // Use defaults as-is
+          desc = 'Balanced mode uses LottoExpert’s recommended defaults – a steady choice for everyday play that balances learning from recent draws with long-term behaviour.';
+        } else if (mode === 'explorative') {
+          // Lean harder into patterns and recent data
+          e = Math.round(baseEpochs * 1.3);
+          b = baseBatchSize; // keep batch stable
+          d = clampValue(baseDropout - 0.1, 0.1, 0.5);
+          lr = baseLearningRate * 1.2;
+          rd = 0.85; // more weight on recent draws
+          desc = 'Explorative mode leans into recent patterns more aggressively – more learning steps, slightly lower dropout, and a stronger focus on what has happened lately.';
+        } else if (mode === 'conservative') {
+          // Stay closer to long-term behaviour
+          e = Math.max(5, Math.round(baseEpochs * 0.7));
+          b = baseBatchSize;
+          d = clampValue(baseDropout + 0.1, 0.1, 0.6);
+          lr = baseLearningRate * 0.8;
+          rd = 0.98; // almost equal weight over time
+          desc = 'Conservative mode stays closer to long-term behaviour – fewer training passes, slightly higher dropout, and recency decay close to 1.0 so older draws still carry strong weight.';
+        }
+
+        // Apply values to the visible inputs
+        if (epochsInput)        { epochsInput.value = e; }
+        if (batchSizeInput)     { batchSizeInput.value = b; }
+        if (dropoutRateInput)   { dropoutRateInput.value = d; }
+        if (learningRateInput)  { learningRateInput.value = lr; }
+        if (hiddenLayersInput)  { hiddenLayersInput.value = h; }
+        var rdInput = document.getElementById('recencyDecay');
+        if (rdInput)            { rdInput.value = rd; }
+
+        if (skaiModeDescription && desc) {
+          skaiModeDescription.textContent = desc;
+        }
+      }
+
+      if (skaiModeButtons && skaiModeButtons.length) {
+        for (var i = 0; i < skaiModeButtons.length; i++) {
+          skaiModeButtons[i].addEventListener('click', function () {
+            var mode = this.getAttribute('data-skai-mode');
+
+            // Update active state
+            for (var j = 0; j < skaiModeButtons.length; j++) {
+              skaiModeButtons[j].classList.remove('is-active');
+            }
+            this.classList.add('is-active');
+
+            applySkaiPreset(mode);
+          });
+        }
+
+        // Ensure Balanced is applied on first load so inputs reflect the current mode
+        applySkaiPreset('balanced');
+      }
+      */ // PATCH: end disabled legacy SKAI preset system
+      
+      var epochValue = document.getElementById('epochValue');
+      var batchSizeValue = document.getElementById('batchSizeValue');
+      var dropoutRateValue = document.getElementById('dropoutRateValue');
+      var latestDrawDateValue = document.getElementById('latestDrawDateValue');
+      var predictionDateValue = document.getElementById('predictionDateValue');
+      var learningRateValue = document.getElementById('learningRateValue');
+      var activationFunctionValue = document.getElementById('activationFunctionValue');
+      var hiddenLayersValue = document.getElementById('hiddenLayersValue');
+      var recencyDecayValue     = document.getElementById('recencyDecayValue');
+var funMessages = [
+  "Analyzing past draws for patterns…",
+  "Measuring how often each number appears over time…",
+  "Checking how recent draws differ from older ones…",
+  "Updating probability estimates based on your settings…",
+  "Reviewing model accuracy on past draws…",
+  "Balancing recent trends with long-term history…",
+  "Refining the model to reduce overfitting…",
+  "Preparing your probability-based number rankings…"
+];
+
+      var messages = [
+        "System Status: Loading historical lottery data...",
+        "System Status: Initializing AI model...",
+        "System Status: Processing training data...",
+        "System Status: Training in progress...",
+        "System Status: Adjusting neural networks...",
+        "System Status: Optimizing parameters...",
+        "System Status: Generating Analysis...",
+        "System Status: Finalizing results...",
+        "System Status: Analysis complete!"
+      ];
+
+      var startTime;
+      var epochStartTime;
+      var smoothedTimePerEpoch = 0;
+      var smoothingFactor = 0.1;
+      var funMessageInterval = 5000;
+      
+
+// --- BEGIN FIXED BACKTEST FUNCTIONS ---
+
+// Utility: build a tensor of recency-decay weights
+function buildSampleWeightTensor(numSamples, decay) {
+  var weights = [];
+  for (var i = 0; i < numSamples; i++) {
+    weights.push(Math.pow(decay, (numSamples - 1) - i));
+  }
+  return tf.tensor1d(weights);
+}
+
+// Global skip influence factor (0.0–1.0).
+// Higher values make Skip & Hit bias stronger in the final probabilities.
+// You can tweak this later (e.g., 0.2 = softer, 0.5 = stronger).
+var SKIP_ALPHA = 0.3;
+
+// --- SKAI probabilistic blending helpers (math-correct ensemble) ---
+// NOTE: SKIP_ALPHA remains for backwards-compatibility, but SKAI now uses a coherent expert blend.
+var SKAI_EPS               = 1e-9;
+var SKAI_SKIP_BETA_DEFAULT = 2.0;  // controls how strongly skipScores separate numbers (hoist-safe)
+var SKAI_BLEND_DEFAULT     = 0.65; // Balanced-mode default AI weight λ (hoist-safe)
+
+function getSelectedSkaiMode() {
+  var btn = document.querySelector('.skai-mode-btn[aria-pressed="true"]');
+  return (btn && btn.getAttribute('data-skai-mode')) ? btn.getAttribute('data-skai-mode') : 'balanced';
+}
+
+// Mode → λ (AI weight). Higher λ = more AI-forward.
+function getSkaiBlendLambda(modeKey) {
+  if (modeKey === 'ai-forward')     { return 0.90; }
+  if (modeKey === 'conservative')   { return 0.80; }
+  if (modeKey === 'explorative')    { return 0.45; }
+  if (modeKey === 'skip-dominant')  { return 0.35; }
+  // mixed is adaptive; computed from ai/skip distributions (see getSkaiLambda below)
+  if (modeKey === 'mixed')          { return NaN; }
+  // balanced / unknown
+  return SKAI_BLEND_DEFAULT;
+}
+
+// Jensen–Shannon divergence for two discrete distributions (bounded, symmetric, stable).
+function skaiJSDivergence(p, q) {
+  var n = Math.min(p.length, q.length);
+  var js = 0;
+  for (var i = 0; i < n; i++) {
+    var pi = Math.max(SKAI_EPS, p[i]);
+    var qi = Math.max(SKAI_EPS, q[i]);
+    var mi = 0.5 * (pi + qi);
+    js += 0.5 * (pi * Math.log(pi / mi) + qi * Math.log(qi / mi));
+  }
+  // Natural log units; bounded in [0, ln(2)]
+  return js;
+}
+
+// Mixed mode: λ adapts to how much AI and Skip agree.
+// - If they agree (low JSD), lean AI-forward more.
+// - If they disagree (high JSD), pull λ toward 0.5 to avoid over-committing.
+function skaiAdaptiveLambdaMixed(aiNorm, skipProb) {
+  var js = skaiJSDivergence(aiNorm, skipProb);
+  var jsMax = Math.log(2); // theoretical maximum
+  var agree = 1 - Math.min(1, js / jsMax); // 1=agree, 0=disagree
+
+  // Map agreement into a safe λ band for Mixed:
+  // - High agreement → λ up to ~0.80
+  // - Low agreement  → λ down to ~0.50
+  var lambda = 0.50 + (0.30 * agree);
+
+  // Clamp defensively
+  return Math.max(0.35, Math.min(0.90, lambda));
+}
+
+// Unified λ getter: fixed for other modes; adaptive for Mixed.
+function getSkaiLambda(modeKey, aiNorm, skipProb) {
+  if (modeKey === 'mixed') {
+    return skaiAdaptiveLambdaMixed(aiNorm, skipProb);
+  }
+  var lam = getSkaiBlendLambda(modeKey);
+  return (typeof lam === 'number' && isFinite(lam)) ? lam : SKAI_BLEND_DEFAULT;
+}
+
+// Mode-aware skip separation (beta). Higher beta makes Skip expert “sharper”.
+function getSkaiSkipBeta(modeKey) {
+  if (modeKey === 'skip-dominant') { return 3.0; }
+  if (modeKey === 'explorative')   { return 2.5; }
+  if (modeKey === 'conservative')  { return 1.6; }
+  if (modeKey === 'ai-forward')    { return 1.6; }
+  if (modeKey === 'mixed')         { return 2.2; }
+  return SKAI_SKIP_BETA_DEFAULT; // balanced
+}
+
+// Temperature for exploration sampling (τ >= 1). τ=1 means no flattening.
+function getSkaiExploreTau(modeKey) {
+  if (modeKey === 'explorative') { return 1.8; }
+  if (modeKey === 'mixed')       { return 1.4; }
+  return 1.0;
+}
+
+// How many picks should be “explore sampled” instead of strict top-k.
+// All modes get at least 1 explore pick to prevent identical outputs across batch runs.
+function getSkaiExploreCount(modeKey, pickSize) {
+  if (modeKey === 'explorative')   { return Math.max(1, Math.floor(pickSize * 0.40)); }
+  if (modeKey === 'mixed')         { return Math.max(1, Math.floor(pickSize * 0.30)); }
+  if (modeKey === 'skip-dominant') { return Math.max(1, Math.floor(pickSize * 0.20)); }
+  // All other modes (ai-forward, balanced, conservative): 1 exploration pick minimum
+  return 1;
+}
+
+// Build a tempered mass (flattened) for sampling: p^(1/τ), normalized.
+function skaiTemperedMass(probMass, tau) {
+  if (!tau || tau <= 1) {
+    return normalizePositive(probMass);
+  }
+  var raw = new Array(probMass.length);
+  var inv = 1 / tau;
+  for (var i = 0; i < probMass.length; i++) {
+    raw[i] = Math.pow(Math.max(SKAI_EPS, probMass[i]), inv);
+  }
+  return normalizePositive(raw);
+}
+
+// Weighted sampling without replacement from a probability mass.
+function skaiSampleWithoutReplacement(probMass, count) {
+  var picks = [];
+  var available = probMass.slice(0);
+
+  for (var k = 0; k < count; k++) {
+    // Build CDF
+    var sum = 0;
+    for (var i = 0; i < available.length; i++) {
+      sum += Math.max(0, available[i]);
+    }
+    if (sum <= 0) {
+      break;
+    }
+
+    var r = Math.random() * sum;
+    var chosen = -1;
+    for (var i = 0; i < available.length; i++) {
+      r -= Math.max(0, available[i]);
+      if (r <= 0) { chosen = i; break; }
+    }
+    if (chosen < 0) { break; }
+
+    picks.push(chosen);
+    available[chosen] = 0; // remove
+  }
+
+  return picks;
+}
+
+// Select final picks: exploit top-(pickSize-exploreCount), explore sample the rest.
+function skaiSelectPicksFromMass(probMass, pickSize, modeKey) {
+  var exploreCount = getSkaiExploreCount(modeKey, pickSize);
+  var tau = getSkaiExploreTau(modeKey);
+
+  var indices = [];
+  // Exploit indices by sorting
+  var ranked = probMass.map(function(p, i) { return { i: i, p: p }; }).sort(function(a, b) { return b.p - a.p; });
+
+  var exploitCount = Math.max(0, pickSize - exploreCount);
+  for (var k = 0; k < exploitCount && k < ranked.length; k++) {
+    indices.push(ranked[k].i);
+  }
+
+  if (exploreCount > 0) {
+    // Build remaining mass excluding already-picked exploit indices
+    var remaining = probMass.slice(0);
+    for (var k = 0; k < indices.length; k++) {
+      remaining[indices[k]] = 0;
+    }
+
+    var tempered = skaiTemperedMass(remaining, tau);
+    var sampled = skaiSampleWithoutReplacement(tempered, exploreCount);
+    for (var k = 0; k < sampled.length; k++) {
+      indices.push(sampled[k]);
+    }
+  }
+
+  // Return sorted numeric values (1-based numbers) for stable display (dedup defensive)
+  var seen = {};
+  var uniq = [];
+  for (var m = 0; m < indices.length; m++) {
+    var idx = indices[m] + 1;
+    if (!seen[idx]) { seen[idx] = true; uniq.push(idx); }
+  }
+  return uniq.sort(function(a, b) { return a - b; });
+}
+
+// Normalize a positive vector into sum-to-1 mass (with epsilon floor).
+function normalizePositive(arr) {
+  var sum = 0;
+  for (var i = 0; i < arr.length; i++) {
+    var v = (typeof arr[i] === 'number' && isFinite(arr[i])) ? Math.max(SKAI_EPS, arr[i]) : SKAI_EPS;
+    sum += v;
+  }
+  var out = new Array(arr.length);
+  var denom = (sum > 0) ? sum : (arr.length * SKAI_EPS);
+  for (var i = 0; i < arr.length; i++) {
+    var v = (typeof arr[i] === 'number' && isFinite(arr[i])) ? Math.max(SKAI_EPS, arr[i]) : SKAI_EPS;
+    out[i] = v / denom;
+  }
+  return out;
+}
+
+// Turn skipScores (0..1) into a proper expert distribution using a softmax-like transform.
+function buildSkipExpertProbs(skipScores, beta) {
+  var raw = new Array(skipScores.length);
+  for (var i = 0; i < skipScores.length; i++) {
+    var u = (typeof skipScores[i] === 'number' && isFinite(skipScores[i])) ? skipScores[i] : 0;
+    // center at 0.5 to reduce runaway bias; beta controls separation
+    raw[i] = Math.exp(beta * (u - 0.5));
+  }
+  return normalizePositive(raw);
+}
+
+// Log-opinion pool (geometric mixture): p ∝ ai^λ * skip^(1-λ)
+function logOpinionPool(aiProbs, skipProbs, lambda) {
+  var out = new Array(aiProbs.length);
+  for (var i = 0; i < aiProbs.length; i++) {
+    var a = Math.max(SKAI_EPS, aiProbs[i]);
+    var s = Math.max(SKAI_EPS, skipProbs[i]);
+    out[i] = Math.exp(lambda * Math.log(a) + (1 - lambda) * Math.log(s));
+  }
+  return normalizePositive(out);
+}
+ // --- END SKAI probabilistic blending helpers ---
+
+// --- SKAI backtest proper scoring rules (math-correct evaluation) ---
+function skaiClipProb(p) {
+  if (typeof p !== 'number' || !isFinite(p)) { return SKAI_EPS; }
+  return Math.min(1 - SKAI_EPS, Math.max(SKAI_EPS, p));
+}
+
+function skaiBrierScore(probMass, actualSet, maxVal) {
+  // probMass: array length maxVal, sum-to-1
+  // actualSet: Set of winning numbers in 1..maxVal
+  var sum = 0;
+  for (var i = 0; i < maxVal; i++) {
+    var p = skaiClipProb(probMass[i]);
+    var y = skaiSetHas(actualSet, i + 1) ? 1 : 0;
+    var d = p - y;
+    sum += d * d;
+  }
+  return sum / maxVal;
+}
+
+function skaiLogLoss(probMass, actualSet, maxVal) {
+  // Strictly proper for Bernoulli marginals; clipped to avoid -Inf
+  var sum = 0;
+  for (var i = 0; i < maxVal; i++) {
+    var p = skaiClipProb(probMass[i]);
+    var y = skaiSetHas(actualSet, i + 1) ? 1 : 0;
+    sum += y ? -Math.log(p) : -Math.log(1 - p);
+  }
+  return sum / maxVal;
+}
+
+function skaiExpectedMassInPicks(probMass, picks) {
+  // picks: array of numbers (1..max)
+  var s = 0;
+  for (var i = 0; i < picks.length; i++) {
+    var idx = picks[i] - 1;
+    if (idx >= 0 && idx < probMass.length) {
+      s += skaiClipProb(probMass[idx]);
+    }
+  }
+  return s;
+}
+// --- END SKAI backtest proper scoring rules ---
+// Compute per-draw Skip feature vectors for a chronological series of draws.
+// drawsNumbers: [ [n1, n2, ...], ... ] in OLDEST → NEWEST order.
+// For each draw t, we compute skipVec[t][k] = draws since number (k+1) last appeared BEFORE draw t.
+function computeSkipFeatureSeries(drawsNumbers, pickSize, mainNumbersMax) {
+  var lastHitIndex   = skaiArrayFill(mainNumbersMax, null);
+  var skipsPerStep   = [];
+
+  for (var t = 0; t < drawsNumbers.length; t++) {
+    var skipVec = skaiArrayFill(mainNumbersMax, 0);
+
+    // For each number, how long since last seen?
+    for (var k = 0; k < mainNumbersMax; k++) {
+      var last = lastHitIndex[k];
+      // If we've never seen it, treat skip as t (all previous draws missed it).
+      var skip = (last === null) ? t : (t - last - 1);
+      skipVec[k] = skip;
+    }
+
+    // Now update lastHitIndex using the CURRENT draw's main numbers.
+    var draw = drawsNumbers[t];
+    for (var j = 0; j < pickSize; j++) {
+      var n = draw[j];
+      if (n >= 1 && n <= mainNumbersMax) {
+        lastHitIndex[n - 1] = t;
+      }
+    }
+
+    skipsPerStep.push(skipVec);
+  }
+
+  // Normalize skips to 0..1 so they play nicely with normalized inputs.
+  var maxSkip = 0;
+  for (var t = 0; t < skipsPerStep.length; t++) {
+    var vec = skipsPerStep[t];
+    for (var i = 0; i < vec.length; i++) {
+      if (vec[i] > maxSkip) {
+        maxSkip = vec[i];
+      }
+    }
+  }
+
+  if (maxSkip > 0) {
+    for (var t = 0; t < skipsPerStep.length; t++) {
+      var vec = skipsPerStep[t];
+      for (var i = 0; i < vec.length; i++) {
+        vec[i] = vec[i] / maxSkip;
+      }
+    }
+  }
+
+  return skipsPerStep;
+}
+
+// Compute per-number Skip scores (0..1) from a DESC list of draws (most recent first).
+// This is a thin wrapper around computeSkipFeatureSeries so older code that calls
+// computeSkipScores(...) continues to work.
+function computeSkipScores(drawsDesc, pickSize, mainNumbersMax) {
+  // Convert DESC draws into ASC array of numbers for computeSkipFeatureSeries.
+  var drawsAscNumbers = drawsDesc.slice().reverse().map(function(d) { return d.numbers; });
+  if (!drawsAscNumbers.length) {
+    return skaiArrayFill(mainNumbersMax, 0);
+  }
+
+  var skipSeries = computeSkipFeatureSeries(drawsAscNumbers, pickSize, mainNumbersMax);
+  var latestVec  = skipSeries[skipSeries.length - 1] || [];
+  var result     = skaiArrayFill(mainNumbersMax, 0);
+
+  for (var i = 0; i < mainNumbersMax; i++) {
+    result[i] = (typeof latestVec[i] === 'number') ? latestVec[i] : 0;
+  }
+
+  return result;
+}
+
+function trainModelForBacktest(trainingDraws, settings, onEpochEndCallback) {
+  var pickSize       = settings.PICK_SIZE;
+  var mainNumbersMax = settings.MAIN_MAX;
+  var extraBallMax   = settings.EXTRA_MAX;
+  var hasExtraBall   = settings.HAS_EXTRA;
+
+  // 1) normalize inputs
+  var drawsNumbers = trainingDraws.map(function(d) { return d.numbers; });
+  var normalized   = drawsNumbers.map(function(arr) {
+    return arr.map(function(n, i) {
+      return i < pickSize
+        ? n / mainNumbersMax
+        : (hasExtraBall ? n / extraBallMax : n);
+    });
+  });
+
+  // 1b) compute Skip feature series (per draw, per main number)
+  var skipFeatureSeries = computeSkipFeatureSeries(drawsNumbers, pickSize, mainNumbersMax);
+
+  // 2) build X and Y arrays
+  var xs = [], ys_main = [], ys_extra = [];
+  for (var i = 0; i < normalized.length - 1; i++) {
+    var baseInput    = normalized[i];
+    var skipFeatures = skipFeatureSeries[i];
+    var inputVec     = baseInput.concat(skipFeatures);
+    xs.push(inputVec);
+
+    var nextNums = drawsNumbers[i + 1];
+
+    // Y for main
+    var mainVec = skaiArrayFill(mainNumbersMax, 0);
+    nextNums.slice(0, pickSize).forEach(function(n) { mainVec[n - 1] = 1; });
+    ys_main.push(mainVec);
+
+    // Y for extra
+    if (hasExtraBall) {
+      var extraVec = skaiArrayFill(extraBallMax, 0);
+      extraVec[nextNums[pickSize] - 1] = 1;
+      ys_extra.push(extraVec);
+    }
+  }
+
+  // 3) create tensors
+  var xsTensor     = tf.tensor2d(xs);
+  var ysMainTensor = tf.tensor2d(ys_main);
+  var ysExtraTensor;
+  if (hasExtraBall) {
+    ysExtraTensor = tf.tensor2d(ys_extra);
+  }
+
+  // 4) recency-decay weights
+  var sampleWeightTensor = buildSampleWeightTensor(xs.length, settings.RECENCY_DECAY);
+
+  // 5) build the model
+  var input = tf.input({ shape: [xs[0].length] });
+  var x = tf.layers.dense({ units: 128, activation: settings.ACTIVATION_FUNCTION }).apply(input);
+  x = tf.layers.dropout({ rate: settings.DROPOUT_RATE }).apply(x);
+  for (var i = 0; i < settings.HIDDEN_LAYERS; i++) {
+    x = tf.layers.dense({ units: 64, activation: settings.ACTIVATION_FUNCTION }).apply(x);
+    x = tf.layers.dropout({ rate: settings.DROPOUT_RATE }).apply(x);
+  }
+  var mainOut = tf.layers.dense({
+    units: settings.MAIN_MAX,
+    activation: 'sigmoid',
+    name: 'main_numbers_output'
+  }).apply(x);
+
+  var model, outputs;
+  if (hasExtraBall) {
+    var extraOut = tf.layers.dense({
+      units: settings.EXTRA_MAX,
+      activation: 'sigmoid',
+      name: 'extra_output'
+    }).apply(x);
+    outputs = [mainOut, extraOut];
+    model = tf.model({ inputs: input, outputs: outputs });
+  } else {
+    outputs = mainOut;
+    model = tf.model({ inputs: input, outputs: outputs });
+  }
+
+  // 6) compile
+  var optimizer = tf.train.adam(settings.LEARNING_RATE);
+  var loss      = hasExtraBall
+    ? ['binaryCrossentropy','binaryCrossentropy']
+    : 'binaryCrossentropy';
+  model.compile({ optimizer: optimizer, loss: loss, metrics: ['accuracy'] });
+
+  // 7) prepare yTrain (no sampleWeight support in this tfjs build)
+  var yTrain;
+  if (hasExtraBall) {
+    yTrain = {
+      main_numbers_output: ysMainTensor,
+      extra_output: ysExtraTensor
+    };
+  } else {
+    yTrain = ysMainTensor;
+  }
+
+  // 8) fit model (recency-weighted)
+  // sampleWeightTensor is a per-sample exponential decay weight (newest samples weigh more).
+  var fitArgs = {
+    epochs:          settings.EPOCHS,
+    batchSize:       settings.BATCH_SIZE,
+    shuffle:         false,
+    validationSplit: 0.2,
+    callbacks:       { onEpochEnd: onEpochEndCallback }
+  };
+
+          // PATCH: sampleWeight not supported in this TFJS build; disable to avoid runtime error.
+          // Recency is still used in backtesting via SKAI blend + skip features; full per-sample weighting requires a TFJS build that supports sampleWeight.
+          // fitArgs.sampleWeight = hasExtraBall
+          //   ? [sampleWeightTensor, sampleWeightTensor]
+          //   : sampleWeightTensor;
+
+  return model.fit(xsTensor, yTrain, fitArgs).then(function() {
+    return model;
+  });
+}
+
+
+function runBacktesting(sortedDrawsAsc, settings) {
+  return new Promise(function(resolveAll, rejectAll) {
+  var results      = [];
+  var N            = sortedDrawsAsc.length;
+
+  // Proper scoring aggregates (lower is better for Brier/LogLoss)
+  var totalBrierMain = 0;
+  var totalLogLossMain = 0;
+  var totalExpectedMassInPicksMain = 0;
+
+  var totalBrierExtra = 0;
+  var totalLogLossExtra = 0;
+  var totalExpectedMassInPicksExtra = 0;
+  var numBacktests = parseInt(document.getElementById('numDrawsBacktest').value) || 3;
+  var backtestIndices = [];
+  for (var i = N - numBacktests; i < N; i++) { if (i >= 1) { backtestIndices.push(i); } }
+
+  // progress tracking
+  var totalSteps = backtestIndices.length * settings.EPOCHS;
+  var completed    = 0;
+  function updateBacktestProgress() {
+    completed++;
+    var pct = Math.round((completed/totalSteps)*100);
+    backtestProgressBar.style.width   = pct + '%';
+    backtestProgressBar.textContent   = pct + '%';
+    progressMessage.innerText         = 'System Status: Backtesting in progress... (' + pct + '%)';
+  }
+
+  // ES5-safe recursive Promise chain replaces async for loop
+  function processBacktestStep(bi) {
+    if (bi >= backtestIndices.length) {
+      // All steps done - build summary and resolve
+      var steps = results.length || 1;
+      results.skaiSummary = {
+        steps: steps,
+        avgBrierMain: (totalBrierMain / steps),
+        avgLogLossMain: (totalLogLossMain / steps),
+        avgExpectedMassMain: (totalExpectedMassInPicksMain / steps),
+        avgBrierExtra: (steps > 0 ? (totalBrierExtra / steps) : 0),
+        avgLogLossExtra: (steps > 0 ? (totalLogLossExtra / steps) : 0),
+        avgExpectedMassExtra: (steps > 0 ? (totalExpectedMassInPicksExtra / steps) : 0)
+      };
+      resolveAll(results);
+      return;
+    }
+
+    var idx = backtestIndices[bi];
+    var nums       = sortedDrawsAsc[idx].numbers;
+    var actualMain = nums.slice(0, settings.PICK_SIZE);
+    var actualExtra= settings.HAS_EXTRA
+      ? nums.slice(settings.PICK_SIZE, settings.PICK_SIZE + settings.EXTRA_COUNT)
+      : [];
+
+    // train & predict
+    var trainingDraws = sortedDrawsAsc.slice(0, idx);
+    trainModelForBacktest(trainingDraws, settings, updateBacktestProgress).then(function(model) {
+
+    // prepare last input (normalized numbers + Skip features)
+    var drawsNumbersForBT   = trainingDraws.map(function(d) { return d.numbers; });
+    var skipFeatureSeriesBT = computeSkipFeatureSeries(drawsNumbersForBT, settings.PICK_SIZE, settings.MAIN_MAX);
+    var lastIndex           = trainingDraws.length - 1;
+
+    var lastBaseNorm = drawsNumbersForBT[lastIndex].map(function(v,i) {
+      return i < settings.PICK_SIZE
+        ? v / settings.MAIN_MAX
+        : (settings.HAS_EXTRA ? v / settings.EXTRA_MAX : v);
+    });
+    var lastSkipFeatures = skipFeatureSeriesBT[lastIndex];
+    var lastInputVec     = lastBaseNorm.concat(lastSkipFeatures);
+
+    var pred = model.predict(tf.tensor2d([ lastInputVec ]));
+
+    var mainArr  = settings.HAS_EXTRA ? pred[0].dataSync() : pred.dataSync();
+    var extraArr = settings.HAS_EXTRA ? pred[1].dataSync() : [];
+
+    // Compute Skip scores for this specific backtest window.
+    // trainingDraws is ASC (oldest to newest), so we reverse to get DESC for computeSkipScores().
+    var skipScoresForBacktest = computeSkipScores(
+      trainingDraws.slice().reverse(),
+      settings.PICK_SIZE,
+      settings.MAIN_MAX
+    );
+
+    // Build full blended mass for proper scoring (main)
+    var actualMainSet = skaiMakeSet(actualMain);
+
+    var aiRawMain = skaiArrayFrom(mainArr).map(function(v) {
+      var p = (typeof v === 'number' && isFinite(v)) ? v : 0;
+      return Math.min(1 - SKAI_EPS, Math.max(SKAI_EPS, p));
+    });
+    var aiNormMain = normalizePositive(aiRawMain);
+
+    var skipArrMain = Array.isArray(skipScoresForBacktest)
+      ? skipScoresForBacktest
+      : skaiArrayFill(aiNormMain.length, 0);
+
+    // Mode-aware skip expert + adaptive Mixed lambda (agreement-based)
+    var modeKeyBT = getSelectedSkaiMode();
+
+    var skipBetaBT = getSkaiSkipBeta(modeKeyBT);
+    var skipProbMain = buildSkipExpertProbs(skipArrMain, skipBetaBT);
+
+    var lambdaBT = getSkaiLambda(modeKeyBT, aiNormMain, skipProbMain);
+
+    // PATCH 7B-3B: backtest readout (shows the lambda being used for this run)
+    var tBT = (typeof skaiGetStoredTemp === 'function') ? skaiGetStoredTemp(modeKeyBT) : 1.0;
+    skaiUpdateBlendReadout(modeKeyBT, lambdaBT, skipBetaBT, tBT);
+
+    var probMassMainNorm = logOpinionPool(aiNormMain, skipProbMain, lambdaBT);
+
+    // Deterministic top-20 ranking for backtest evaluation (no exploration here)
+    var mainProbs = probMassMainNorm
+      .map(function(p, i) {
+        var skipScore = (Array.isArray(skipScoresForBacktest) && skipScoresForBacktest[i] != null)
+          ? skipScoresForBacktest[i]
+          : 0;
+
+        return {
+          number:    i + 1,
+          prob:      p,
+          baseProb:  aiNormMain[i],
+          skipScore: skipScore
+        };
+      })
+      .sort(function(a, b) { return b.prob - a.prob; })
+      .slice(0, 20);
+    var mainPicks = mainProbs.slice(0, settings.PICK_SIZE).map(function(o) { return o.number; });
+
+    // Proper scoring updates (main)
+    totalBrierMain += skaiBrierScore(probMassMainNorm, actualMainSet, settings.MAIN_MAX);
+    totalLogLossMain += skaiLogLoss(probMassMainNorm, actualMainSet, settings.MAIN_MAX);
+    totalExpectedMassInPicksMain += skaiExpectedMassInPicks(probMassMainNorm, mainPicks);
+
+    var mainMatch=0;
+    var predictedMain = mainProbs.map(function(x) {
+      if (actualMain.indexOf(x.number) !== -1) { mainMatch++; return '[[span class="match"]]' + x.number + '[[/span]]'; }
+      return x.number;
+    });
+    // top-extras
+    var predictedExtra = [], extraMatch=0;
+    if (settings.HAS_EXTRA) {
+      var actualExtraSet = skaiMakeSet(actualExtra);
+
+      // Build full normalized mass for extra
+      var aiRawExtra = skaiArrayFrom(extraArr).map(function(v) {
+        var p = (typeof v === 'number' && isFinite(v)) ? v : 0;
+        return Math.min(1 - SKAI_EPS, Math.max(SKAI_EPS, p));
+      });
+      var probMassExtraNorm = normalizePositive(aiRawExtra);
+
+      var extraProbs = skaiArrayFrom(extraArr)
+        .map(function(p,i) { return { number: i+1, prob: p }; })
+        .sort(function(a,b) { return b.prob-a.prob; })
+        .slice(0, settings.EXTRA_SUGGESTIONS);
+
+      // Picks used for evaluation (top EXTRA_COUNT)
+      var extraPicks = extraProbs.slice(0, settings.EXTRA_COUNT).map(function(o) { return o.number; });
+
+      // Proper scoring updates (extra)
+      totalBrierExtra += skaiBrierScore(probMassExtraNorm, actualExtraSet, settings.EXTRA_MAX);
+      totalLogLossExtra += skaiLogLoss(probMassExtraNorm, actualExtraSet, settings.EXTRA_MAX);
+      totalExpectedMassInPicksExtra += skaiExpectedMassInPicks(probMassExtraNorm, extraPicks);
+      predictedExtra = extraProbs.map(function(x) {
+        if (actualExtra.indexOf(x.number) !== -1) { extraMatch++; return '[[span class="match"]]' + x.number + '[[/span]]'; }
+        return x.number;
+      });
+    }
+
+    results.push({
+      date:             sortedDrawsAsc[idx].draw_date,
+      actualMain:       actualMain.join(', '),
+      actualExtra:      actualExtra,
+      predictedMain:    predictedMain.join(', '),
+      predictedExtra:   predictedExtra,
+      mainMatchCount:   mainMatch,
+      extraMatchCount:  extraMatch
+    });
+      // Continue with next step (recursive ES5-safe chain)
+      processBacktestStep(bi + 1);
+    }).catch(rejectAll);
+  } // end processBacktestStep
+
+  // Start the recursive chain
+  try {
+    processBacktestStep(0);
+  } catch (e) {
+    rejectAll(e);
+  }
+  }); // end new Promise
+}
+// --- END FIXED BACKTEST FUNCTIONS ---
+
+
+      
+      startButton.addEventListener('click', function startAnalysis(event) {
+       // Scroll the loading container into center view on start
+setTimeout(function() {
+  var loadingEl = document.getElementById('loading');
+  if (loadingEl && typeof loadingEl.scrollIntoView === 'function') {
+    loadingEl.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center'
+    });
+  }
+}, 100); // slight delay to ensure DOM has time to show the element
+ 
+        event.preventDefault();
+        // TensorFlow.js and Chart.js are loaded via <script> tags in the head.
+        // We now rely on the global 'tf' and 'Chart' objects.
+        loadingDiv.style.display = 'block';
+        startButton.style.display = 'none';
+        var EPOCHS = parseInt(epochsInput.value);
+        var BATCH_SIZE = parseInt(batchSizeInput.value);
+        var DROPOUT_RATE = parseFloat(dropoutRateInput.value);
+        var LEARNING_RATE = parseFloat(learningRateInput.value);
+        var ACTIVATION_FUNCTION = activationFunctionInput.value;
+        var HIDDEN_LAYERS = parseInt(hiddenLayersInput.value);
+        var recencyDecay = parseFloat(document.getElementById('recencyDecay').value) || 1;
+        document.getElementById('saveRecencyDecay').value = recencyDecay;
+
+        if (isNaN(EPOCHS) || EPOCHS <= 0) {
+          alert("Please enter a valid number of epochs.");
+          loadingDiv.style.display = 'none';
+          startButton.style.display = 'block';
+          return;
+        }
+        if (isNaN(BATCH_SIZE) || BATCH_SIZE <= 0) {
+          alert("Please enter a valid batch size.");
+          loadingDiv.style.display = 'none';
+          startButton.style.display = 'block';
+          return;
+        }
+        if (isNaN(DROPOUT_RATE) || DROPOUT_RATE < 0 || DROPOUT_RATE > 1) {
+          alert("Please enter a valid dropout rate between 0 and 1.");
+          loadingDiv.style.display = 'none';
+          startButton.style.display = 'block';
+          return;
+        }
+        if (isNaN(LEARNING_RATE) || LEARNING_RATE <= 0) {
+          alert("Please enter a valid learning rate greater than 0.");
+          loadingDiv.style.display = 'none';
+          startButton.style.display = 'block';
+          return;
+        }
+        if (!ACTIVATION_FUNCTION) {
+          alert("Please select an activation function.");
+          loadingDiv.style.display = 'none';
+          startButton.style.display = 'block';
+          return;
+        }
+        if (isNaN(HIDDEN_LAYERS) || HIDDEN_LAYERS <= 0) {
+          alert("Please enter a valid number of hidden layers.");
+          loadingDiv.style.display = 'none';
+          startButton.style.display = 'block';
+          return;
+        }
+        epochValue.innerText = EPOCHS;
+        batchSizeValue.innerText = BATCH_SIZE;
+        dropoutRateValue.innerText = DROPOUT_RATE;
+        learningRateValue.innerText = LEARNING_RATE;
+        activationFunctionValue.innerText = ACTIVATION_FUNCTION;
+        hiddenLayersValue.innerText = HIDDEN_LAYERS;
+        recencyDecayValue.innerText = recencyDecay;  
+        var latestDrawDate = latestDrawDateInput.value;
+        if (!latestDrawDate) {
+          alert("Please enter a valid latest draw date.");
+          loadingDiv.style.display = 'none';
+          startButton.style.display = 'block';
+          return;
+        }
+        latestDrawDateValue.innerText = latestDrawDate;
+        var filteredDraws = draws.filter(function(draw) { return new Date(draw.draw_date) <= new Date(latestDrawDate); });
+        // Sort ascending (OLDEST first) so we can build proper next-draw pairs and Skip features
+        filteredDraws.sort(function(a, b) { return new Date(a.draw_date) - new Date(b.draw_date); });
+        if (filteredDraws.length < 2) {
+          alert("Not enough data before the selected date. Please choose a different date.");
+          loadingDiv.style.display = 'none';
+          startButton.style.display = 'block';
+          return;
+        }
+        var latestDrawData = filteredDraws[filteredDraws.length - 1];
+        var latestDraw = latestDrawData.numbers;
+        var historicalData = filteredDraws.map(function(draw) { return draw.numbers; });
+        // Pre-compute Skip feature series for the full historical sequence
+        var skipFeatureSeries = computeSkipFeatureSeries(historicalData, pickSize, mainNumbersMax);
+        startTime = Date.now();
+
+        epochStartTime = Date.now();
+        var funMessageIndex = 0;
+        var funMessageTimer = setInterval(function() {
+          funMessageIndex = (funMessageIndex + 1) % funMessages.length;
+          funMessageDiv.innerText = funMessages[funMessageIndex];
+        }, funMessageInterval);
+        countdownDiv.innerHTML = "Estimated time: Calculating...";
+        try { window.dispatchEvent(new Event('skai:ml:start')); } catch (_) {}
+        // Single-threaded JS guarantees no concurrency; skip re-init if already on CPU
+        // to avoid resetting TensorFlow.js internal PRNG state between batch runs.
+        var backendReady = (typeof tf.getBackend === 'function' && tf.getBackend() === 'cpu')
+          ? Promise.resolve()
+          : tf.setBackend('cpu');
+        backendReady.then(function() {
+          console.log('TensorFlow.js version:', tf.version.tfjs);
+          console.log('Backend:', tf.getBackend());
+          progressMessage.innerText = messages[0];
+    // normalize and build X/Y (with Skip features)
+        var normalizedHistoricalData = normalizeData(historicalData);
+        var xs = [];
+        var ys_main = [];
+        var ys_extra = [];
+
+        // PATCH: Medium recency weighting without sampleWeight (TFJS build limitation)
+        // Strategy: replicate newest 25% of training pairs 3× (older 75% stay 1×)
+        var totalPairs   = historicalData.length - 1;
+        var recentStart  = Math.floor(totalPairs * 0.75); // newest 25%
+
+        for (var i = 0; i < totalPairs; i++) {
+          var baseInput    = normalizedHistoricalData[i];
+          var skipFeatures = skipFeatureSeries[i];
+          var inputVector  = baseInput.concat(skipFeatures);
+
+          var nextDraw = historicalData[i + 1];
+
+          // Y: main multi-hot
+          var mainNumbers = nextDraw.slice(0, pickSize);
+          var mainNumbersVector = skaiArrayFill(mainNumbersMax, 0);
+          mainNumbers.forEach(function(num) {
+            if (num >= 1 && num <= mainNumbersMax) {
+              mainNumbersVector[num - 1] = 1;
+            }
+          });
+
+          // Y: extra one-hot (if present)
+          var extraVector = null;
+          if (hasExtraBall) {
+            var extraNumber = nextDraw[pickSize];
+            extraVector = skaiArrayFill(extraBallMax, 0);
+            if (extraNumber >= 1 && extraNumber <= extraBallMax) {
+              extraVector[extraNumber - 1] = 1;
+            }
+          }
+
+          // Replication factor: driven by recencyDecay (set by profile preset).
+          // Thresholds are chosen to bracket the three standard profile values:
+          //   explorative ~0.85 (below 0.88) → 5x  (heavy recent-draw weighting)
+          //   balanced    ~0.94 (below 0.95) → 3x  (moderate recent-draw weighting)
+          //   conservative ~0.97 (above 0.95) → 2x  (near-uniform weighting)
+          var recentReps = (recencyDecay <= 0.88) ? 5 : (recencyDecay <= 0.95) ? 3 : 2;
+          var reps = (i >= recentStart) ? recentReps : 1;
+
+          for (var r = 0; r < reps; r++) {
+            xs.push(inputVector);
+            ys_main.push(mainNumbersVector);
+            if (hasExtraBall) {
+              ys_extra.push(extraVector);
+            }
+          }
+        }
+
+        // PATCH: sampleWeight disabled (not supported in this TFJS build)
+        // const sampleWeightTensor = ...
+
+
+// ── tensors ──
+        var xsTensor     = tf.tensor2d(xs);
+        var ysMainTensor = tf.tensor2d(ys_main);
+
+          var ysExtraTensor;
+          if (hasExtraBall) {
+            ysExtraTensor = tf.tensor2d(ys_extra);
+          }
+          var inputShape = xs[0].length;
+          var input = tf.input({ shape: [inputShape] });
+          var x = tf.layers.dense({ units: 128, activation: ACTIVATION_FUNCTION }).apply(input);
+          x = tf.layers.dropout({ rate: DROPOUT_RATE }).apply(x);
+          for (var i = 0; i < HIDDEN_LAYERS; i++) {
+            x = tf.layers.dense({ units: 64, activation: ACTIVATION_FUNCTION }).apply(x);
+            x = tf.layers.dropout({ rate: DROPOUT_RATE }).apply(x);
+          }
+          var mainNumbersOutput = tf.layers.dense({ units: mainNumbersMax, activation: 'sigmoid', name: 'main_numbers_output' }).apply(x);
+          var outputs, model;
+          if (hasExtraBall) {
+            var extraOutput = tf.layers.dense({ units: extraBallMax, activation: 'sigmoid', name: 'extra_output' }).apply(x);
+            outputs = [mainNumbersOutput, extraOutput];
+            model = tf.model({ inputs: input, outputs: outputs });
+          } else {
+            outputs = mainNumbersOutput;
+            model = tf.model({ inputs: input, outputs: outputs });
+          }
+          var optimizer = tf.train.adam(LEARNING_RATE);
+          var loss, metrics;
+          if (hasExtraBall) {
+            loss = ['binaryCrossentropy', 'binaryCrossentropy'];
+            metrics = ['accuracy'];
+          } else {
+            loss = 'binaryCrossentropy';
+            metrics = ['accuracy'];
+          }
+          model.compile({
+            optimizer: optimizer,
+            loss: loss,
+            metrics: metrics
+          });
+          var yTrain;
+          if (hasExtraBall) {
+            yTrain = {
+              main_numbers_output: ysMainTensor,
+              extra_output: ysExtraTensor
+            };
+          } else {
+            yTrain = ysMainTensor;
+          }
+		var fitArgs = {
+            epochs: EPOCHS,
+            batchSize: BATCH_SIZE,
+            shuffle: false,
+            validationSplit: 0.2,
+            // PATCH: sampleWeight disabled (not supported in this TFJS build)
+            // Recency weighting is approximated via training-pair replication (newest 25% repeated 3×).
+            callbacks: {
+              onEpochBegin: function(epoch, logs) {
+                epochStartTime = Date.now();
+                progressMessage.innerText = messages[3];
+              },
+              onEpochEnd: function(epoch, logs) {
+                var epochEndTime = Date.now();
+                var epochDuration = (epochEndTime - epochStartTime) / 1000;
+                if (epoch === 0) {
+                  smoothedTimePerEpoch = epochDuration;
+                } else {
+                  smoothedTimePerEpoch = (smoothingFactor * epochDuration) + ((1 - smoothingFactor) * smoothedTimePerEpoch);
+                }
+                var epochsRemaining = EPOCHS - (epoch + 1);
+                var estimatedRemainingTime = epochsRemaining * smoothedTimePerEpoch;
+                if (estimatedRemainingTime > 0) {
+                  var minutes = Math.floor(estimatedRemainingTime / 60);
+                  var seconds = Math.floor(estimatedRemainingTime % 60);
+                  var mm = (minutes < 10 ? '0' : '') + minutes;
+                  var ss = (seconds < 10 ? '0' : '') + seconds;
+                  countdownDiv.innerHTML = 'Estimated time left: ' + mm + ':' + ss;
+                } else {
+                  countdownDiv.innerHTML = "Main analysis completed! Now running backtesting...";
+                }
+                var percentage = Math.round(((epoch + 1) / EPOCHS) * 100);
+                progressBar.style.width = percentage + '%';
+                progressBar.textContent = percentage + '%';
+                var msgIndex = Math.floor((percentage / 100) * messages.length);
+                if (msgIndex >= messages.length) {
+                  msgIndex = messages.length - 1;
+                }
+                progressMessage.innerText = messages[msgIndex];
+              }
+            }
+          };
+
+          // PATCH: training must run before predict; otherwise results are random + instant
+          progressMessage.innerText = messages[3];
+          return model.fit(xsTensor, yTrain, fitArgs).then(function() {
+          progressMessage.innerText = messages[6];
+
+          // Build prediction input: normalized latest draw + its Skip feature vector
+          var latestIndex          = historicalData.length - 1;
+          var normalizedLatestDraw = normalizeData([latestDraw])[0];
+          var latestSkipFeatures   = skipFeatureSeries[latestIndex];
+          var latestInputVector    = normalizedLatestDraw.concat(latestSkipFeatures);
+
+          // Use the latest Skip feature vector as our per-number Skip scores for bias
+          var skipScores = latestSkipFeatures;
+
+          var prediction = model.predict(tf.tensor2d([latestInputVector]));
+          var mainNumbersPrediction, extraPrediction;
+          if (hasExtraBall) {
+            mainNumbersPrediction = prediction[0].dataSync();
+            extraPrediction = prediction[1].dataSync();
+          } else {
+            mainNumbersPrediction = prediction.dataSync();
+          }
+          // Apply mathematically coherent SKAI blend:
+          // 1) normalize AI marginals into a mass function
+          // 2) convert skipScores into a skip-expert distribution
+          // 3) combine via log-opinion pool (geometric mixture)
+          var modeKey = getSelectedSkaiMode();
+
+          // 1) AI marginals → normalized mass
+          var aiRaw = skaiArrayFrom(mainNumbersPrediction).map(function(v) {
+            var p = (typeof v === 'number' && isFinite(v)) ? v : 0;
+            return Math.min(1 - SKAI_EPS, Math.max(SKAI_EPS, p));
+          });
+          var aiNorm = normalizePositive(aiRaw);
+
+          // 2) Skip scores → skip-expert distribution
+          var skipArr = Array.isArray(skipScores)
+            ? skipScores
+            : skaiArrayFill(aiNorm.length, 0);
+
+          var skipBetaLocal = getSkaiSkipBeta(modeKey);
+          var skipProbLocal = buildSkipExpertProbs(skipArr, skipBetaLocal);
+
+          // 3) Blend weight λ (adaptive in Mixed)
+          var lambdaLocal = getSkaiLambda(modeKey, aiNorm, skipProbLocal);
+
+          // Live blend readout (AI λ vs Skip 1−λ, plus β and T)
+          var tLive = (typeof skaiGetStoredTemp === 'function') ? skaiGetStoredTemp(modeKey) : 1.0;
+          skaiUpdateBlendReadout(modeKey, lambdaLocal, skipBetaLocal, tLive);
+
+          var finalProbNorm = logOpinionPool(aiNorm, skipProbLocal, lambdaLocal);
+
+          // PATCH: removed duplicate (older) SKAI blend block to prevent redeclarations
+
+          // PATCH 7B-3A: live readout with actual λ (adaptive in Mixed)
+          // PATCH: lambdaLocal is the live λ from the SKAI blend block above
+          var tLive = (typeof skaiGetStoredTemp === 'function') ? skaiGetStoredTemp(modeKey) : 1.0;
+          skaiUpdateBlendReadout(modeKey, lambdaLocal, skipBetaLocal, tLive);
+
+          // PATCH: removed duplicate finalProbNorm declaration; reuse the earlier finalProbNorm
+          var mainNumbersProbabilities = finalProbNorm.map(function(p, i) {
+            var number    = i + 1;
+            var skipScore = (Array.isArray(skipScores) && skipScores[i] != null) ? skipScores[i] : 0;
+
+            return {
+              number:          number,
+              probability:     p,
+              baseProbability: aiNorm[i],
+              skipScore:       skipScore
+            };
+          });
+          mainNumbersProbabilities.sort(function(a, b) { return b.probability - a.probability; });
+          // Populate batch-runner capture globals
+          try {
+            window.skaiSaveMainOrdered = mainNumbersProbabilities.slice(0, 20).map(function (item) { return item.number; });
+            window.skaiSaveExtraOrdered = [];
+          } catch (_) {}
+          try { window.dispatchEvent(new Event('skai:score:done')); } catch (_) {}
+          // Final selection: exploit + controlled exploration (Explorative/Mixed), strict top-k otherwise
+          var pickedNumbers = skaiSelectPicksFromMass(finalProbNorm, pickSize, modeKey);
+
+          // Map pickedNumbers back to objects (for display wiring that expects {number,...})
+          var pickedSet = skaiMakeSet(pickedNumbers);
+          var predictedMainNumbers = mainNumbersProbabilities
+            .filter(function(item) { return skaiSetHas(pickedSet, item.number); })
+            .sort(function(a, b) { return a.number - b.number; });
+          // Display top 20 numbers in order of likelihood (highest probability first)
+          var numbersHTML = '';
+          var top20Nums = mainNumbersProbabilities.slice(0, 20);
+          for (var rankIdx = 0; rankIdx < top20Nums.length; rankIdx++) {
+            var rankItem = top20Nums[rankIdx];
+            numbersHTML +=
+              '[[span class="skai-rank-wrap"]]' +
+              '[[span class="skai-rank-label"]]#' + (rankIdx + 1) + '[[/span]]' +
+              '[[span class="number-ball"]]' + rankItem.number + '[[/span]]' +
+              '[[/span]]\n';
+          }
+
+          // For hasExtraBall games, show top 5 extra balls in order of likelihood.
+          // extraSorted is computed once per prediction render (small array, O(n log n) is negligible).
+          if (hasExtraBall && extraPrediction) {
+            var extraSorted = skaiArrayFrom(extraPrediction)
+              .map(function(prob, eIdx) { return { number: eIdx + 1, probability: prob }; });
+            extraSorted.sort(function(a, b) { return b.probability - a.probability; });
+            var top5Extra = extraSorted.slice(0, 5);
+            if (top5Extra.length > 0) {
+              numbersHTML += '[[span class="skai-extra-divider"]]— Extra Ball —[[/span]]\n';
+              for (var eRankIdx = 0; eRankIdx < top5Extra.length; eRankIdx++) {
+                numbersHTML +=
+                  '[[span class="skai-rank-wrap"]]' +
+                  '[[span class="skai-rank-label"]]#' + (eRankIdx + 1) + '[[/span]]' +
+                  '[[span class="number-ball powerball"]]' + top5Extra[eRankIdx].number + '[[/span]]' +
+                  '[[/span]]\n';
+              }
+            }
+          }
+
+          predictedNumbersDiv.innerHTML = numbersHTML;
+          predictedNumbersDiv.style.display = "block";
+
+          var breakdownHTML =
+            '[[h3]]Top 20 Main Numbers Breakdown[[/h3]]' +
+            '[[table]][[thead]][[tr]]' +
+            '[[th]]Number[[/th]]' +
+            '[[th]]Probability (%)[[/th]]' +
+            '[[/tr]][[/thead]][[tbody]]';
+          mainNumbersProbabilities.slice(0, 20).forEach(function(item) {
+            var probabilityPercentage = (item.probability * 100).toFixed(2);
+            breakdownHTML +=
+              '[[tr]]' +
+              '[[td]]' + item.number + '[[/td]]' +
+              '[[td]]' + probabilityPercentage + '%[[/td]]' +
+              '[[/tr]]';
+          });
+          breakdownHTML += '[[/tbody]][[/table]]';
+          if (hasExtraBall) {
+            var extraProbabilities = skaiArrayFrom(extraPrediction)
+              .map(function(prob, index) { return { number: index + 1, probability: prob }; });
+            extraProbabilities.sort(function(a, b) { return b.probability - a.probability; });
+            breakdownHTML +=
+              '[[h3]]Top 5 Extra Numbers Breakdown[[/h3]]' +
+              '[[table]][[thead]][[tr]]' +
+              '[[th]]Number[[/th]]' +
+              '[[th]]Probability (%)[[/th]]' +
+              '[[/tr]][[/thead]][[tbody]]';
+            extraProbabilities.slice(0, 5).forEach(function(item) {
+              var probabilityPercentage = (item.probability * 100).toFixed(2);
+              breakdownHTML +=
+                '[[tr]]' +
+                '[[td]]' + item.number + '[[/td]]' +
+                '[[td]]' + probabilityPercentage + '%[[/td]]' +
+                '[[/tr]]';
+            });
+            breakdownHTML += '[[/tbody]][[/table]]';
+          }
+          numberBreakdownTableDiv.innerHTML = breakdownHTML;
+          
+          progressMessage.innerText = messages[8];
+          var predictionDate = new Date();
+          var predictionDateString = predictionDate.toLocaleString();
+          predictionDateValue.innerText = predictionDateString;
+ 
+   
+        
+        // (1) capture your PHP lotteryName into JS input
+var lotteryName = <?php echo json_encode($lotteryName); ?>;
+
+// (2) update the hidden generated_at if you haven’t already
+document.getElementById('saveGeneratedAt').value =
+  predictionDateString; // or use your formatDateForDB() if you need YYYY‑MM‑DD HH:MM:SS
+
+// (3) now push the same timestamp into your label field
+document.getElementById('saveLabel').value =
+  lotteryName + ' Prediction – ' + predictionDateString;
+
+        
+        
+        // — format to YYYY‑MM‑DD HH:MM:SS for our DB —
+function formatDateForDB(d) {
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  return d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate()) + ' ' +
+         pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+}
+
+      // populate hidden field with DB-formatted timestamp
+        var now = new Date();
+        var dbTimestamp = formatDateForDB(now);
+        document.getElementById('saveGeneratedAt').value = dbTimestamp;
+        // label can still show human-friendly time
+        document.getElementById('saveLabel').value =
+          lotteryName + ' Prediction – ' + now.toLocaleString();
+
+
+// Save AI analysis specs to hidden fields
+document.getElementById('saveEpochs').value              = EPOCHS;
+document.getElementById('saveBatchSize').value           = BATCH_SIZE;
+document.getElementById('saveDropoutRate').value         = DROPOUT_RATE;
+document.getElementById('saveLearningRate').value        = LEARNING_RATE;
+document.getElementById('saveActivationFunction').value  = ACTIVATION_FUNCTION;
+document.getElementById('saveHiddenLayers').value        = HIDDEN_LAYERS;
+
+ 
+           // After generating the predictions, populate the hidden fields in the save form
+          // For MAIN numbers, use all predicted main numbers instead of just the first "pickSize".
+          var mainPredictionNumbers = mainNumbersProbabilities
+  .slice(0, 20)
+  .map(function(item) { return item.number; })
+  .join(',');
+
+      
+          // For the EXTRA ball predictions, if applicable, compute the entire sorted list
+          var extraPredictionNumbers = "";
+          if (hasExtraBall) {
+            var extraProbabilities = skaiArrayFrom(extraPrediction).map(function(prob, index) { return { number: index + 1, probability: prob }; });
+            extraProbabilities.sort(function(a, b) { return b.probability - a.probability; });
+           extraPredictionNumbers = extraProbabilities
+  .slice(0, 5)
+  .map(function(item) { return item.number; })
+  .join(',');
+          }
+      
+          // Populate the hidden form fields with the entire list of predicted values.
+          document.getElementById('saveMainNumbers').value = mainPredictionNumbers;
+          document.getElementById('saveExtraBallNumbers').value = extraPredictionNumbers;
+          // Persist extra ball picks for batch-runner capture
+          try {
+            if (hasExtraBall && extraPredictionNumbers) {
+              var _extraArr = extraPredictionNumbers.split(',').map(function (n) { return parseInt(n, 10); }).filter(function (n) { return !isNaN(n); });
+              window.skaiSaveExtraOrdered = _extraArr;
+            }
+          } catch (_) {}
+      
+          // BEGIN BACKTESTING STEP (if user enabled it)
+          if (enableBacktestCheckbox.checked) {
+            backtestNoticeDiv.style.display = 'block';
+            backtestProgressContainer.style.display = 'block';
+            countdownDiv.innerHTML = "Running backtesting on previous draws...";
+      
+            var sortedDrawsAsc = filteredDraws.slice().sort(function(a, b) { return new Date(a.draw_date) - new Date(b.draw_date); });
+            var settings = {
+              EPOCHS: EPOCHS,
+              BATCH_SIZE: BATCH_SIZE,
+              DROPOUT_RATE: DROPOUT_RATE,
+              LEARNING_RATE: LEARNING_RATE,
+              ACTIVATION_FUNCTION: ACTIVATION_FUNCTION,
+              HIDDEN_LAYERS: HIDDEN_LAYERS,
+              RECENCY_DECAY:   recencyDecay,
+              PICK_SIZE:       pickSize,
+              MAIN_MAX:        mainNumbersMax,
+              EXTRA_COUNT:     numExtraBalls,
+              EXTRA_MAX:       extraBallMax,
+              HAS_EXTRA:       hasExtraBall,
+              EXTRA_SUGGESTIONS: topExtraSuggestions
+            };
+            // ES5-safe: return the Promise so the outer chain waits for backtest to finish
+            return runBacktesting(sortedDrawsAsc, settings).then(function(backtestResults) {
+              var backtestHTML = renderBacktestResults(backtestResults);
+              backtestResultsDiv.innerHTML = backtestHTML;
+              backtestResultsDiv.style.display = 'block';
+              backtestNoticeDiv.innerHTML = "[[h4]]Backtesting Complete[[/h4]][[p]]Backtesting has finished processing all draws.[[/p]]";
+              backtestProgressContainer.style.display = 'none';
+              countdownDiv.innerHTML = "Done! Analysis is complete.";
+            });
+          }
+          // END BACKTESTING STEP
+          return null; // no backtest - signal success to outer .then()
+        }); // end model.fit().then()
+      }).then(function() {
+        // Final cleanup runs after tf.setBackend + model.fit (+ optional backtest) all complete
+        setTimeout(function() {
+          loadingDiv.style.display = 'none';
+          predictionDiv.style.display = 'block';
+          numberBreakdownDiv.style.display = 'block';
+        }, 1000);
+        clearInterval(funMessageTimer);
+        startButton.style.display = 'block';
+        try { window.dispatchEvent(new Event('skai:done')); } catch (_) {}
+      }).catch(function(error) {
+        console.error('Error during model training or Analysis:', error);
+        loadingDiv.innerText = 'An error occurred during model training or Analysis: ' + error.message;
+        startButton.style.display = 'block';
+        clearInterval(funMessageTimer);
+      });
+      });
+    });
+  [[/script]]
+  <!-- Deferred Chart & TFJS initialization (Block C) -->
+[[script defer]]
+document.addEventListener('DOMContentLoaded', function () {
+  var canvas1 = document.getElementById('coverageChart');
+  var canvas2 = document.getElementById('ticketsChart');
+  var ctx1 = canvas1 ? canvas1.getContext('2d') : null;
+  var ctx2 = canvas2 ? canvas2.getContext('2d') : null;
+
+  if (!ctx1 || !ctx2 || typeof Chart === 'undefined') {
+    console.error("Chart.js not ready or canvas not found.");
+    return;
+  }
+
+  var rootStyles = getComputedStyle(document.documentElement);
+  var primaryBlue = rootStyles.getPropertyValue('--primary-blue').trim();
+  if (!primaryBlue) {
+    primaryBlue = rootStyles.getPropertyValue('--skai-blue').trim() || '#1C66FF';
+  }
+
+  function commonOptions(label) {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: label, color: '#333' },
+          ticks: {
+            color: '#333',
+            callback: function (val) {
+              if (label.indexOf('Coverage') !== -1) return val + '%';
+              if (val >= 1000) return (val / 1000).toFixed(1) + 'k';
+              return val;
+            }
+          },
+          grid: { color: '#ccc' }
+        },
+        x: {
+          ticks: { color: '#333' },
+          grid: { display: false }
+        }
+      }
+    };
+  }
+
+  new Chart(ctx1, {
+    type: 'bar',
+    data: {
+      labels: <?php echo json_encode(array_column($stats, 'count')); ?>,
+      datasets: [{
+        data: <?php echo json_encode(array_column($stats, 'pct')); ?>,
+        backgroundColor: primaryBlue,
+        borderRadius: 4
+      }]
+    },
+    options: commonOptions('Coverage %')
+  });
+
+  new Chart(ctx2, {
+    type: 'bar',
+    data: {
+      labels: ['Full Wheel', 'Reduced Wheel'],
+      datasets: [{
+        data: [11628, 28],
+        backgroundColor: primaryBlue,
+        borderRadius: 4
+      }]
+    },
+    options: commonOptions('Tickets')
+  });
+});
+[[/script]]
+
+<!-- SKAI Feature B: Save interception - prevents redirect, shows toast + inline status -->
+[[script]]
+(function () {
+  "use strict";
+
+  function showSaveToast(msg) {
+    try {
+      var old = document.getElementById("skai-save-toast");
+      if (old && old.parentNode) { old.parentNode.removeChild(old); }
+      var t = document.createElement("div");
+      t.id = "skai-save-toast";
+      t.setAttribute("role", "status");
+      t.setAttribute("aria-live", "polite");
+      t.style.cssText = "position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#065f46;color:#fff;padding:10px 22px;border-radius:999px;font-size:0.92rem;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.18);z-index:99999;pointer-events:none;opacity:1;transition:opacity 0.4s;";
+      t.textContent = msg;
+      document.body.appendChild(t);
+      setTimeout(function () {
+        try { t.style.opacity = "0"; } catch (_) {}
+        setTimeout(function () { try { if (t.parentNode) { t.parentNode.removeChild(t); } } catch (_) {} }, 450);
+      }, 3200);
+    } catch (_) {}
+  }
+
+  function showInlineSaveStatus(form) {
+    try {
+      var existing = form.querySelector("[data-skai-inline-saved]");
+      if (existing && existing.parentNode) { existing.parentNode.removeChild(existing); }
+      var now = new Date();
+      var hh = ("0" + now.getHours()).slice(-2);
+      var mm = ("0" + now.getMinutes()).slice(-2);
+      var ss = ("0" + now.getSeconds()).slice(-2);
+      var span = document.createElement("span");
+      span.setAttribute("data-skai-inline-saved", "1");
+      span.style.cssText = "display:inline-block;margin-left:10px;color:#065f46;font-size:0.85rem;font-weight:600;vertical-align:middle;";
+      span.textContent = "Saved at " + hh + ":" + mm + ":" + ss;
+      var actions = form.querySelector(".skai-save-actions");
+      if (actions) {
+        actions.appendChild(span);
+      } else {
+        form.appendChild(span);
+      }
+    } catch (_) {}
+  }
+
+  function interceptSaveForm(form) {
+    if (!form || form.__skaiSaveIntercepted) { return; }
+    form.__skaiSaveIntercepted = true;
+
+    form.addEventListener("submit", function (ev) {
+      try { ev.preventDefault(); } catch (_) {}
+      try { ev.stopPropagation(); } catch (_) {}
+
+      var submitBtn = form.querySelector("[type=submit]");
+      if (submitBtn) { submitBtn.disabled = true; }
+
+      var hint = form.querySelector("[id$=save-hint], [id$=-save-hint]");
+      if (hint) { hint.textContent = "Saving..."; }
+
+      var data = [];
+      var inputs = form.elements;
+      for (var i = 0; i < inputs.length; i++) {
+        var el = inputs[i];
+        if (!el.name) { continue; }
+        var tag = el.tagName.toUpperCase();
+        if (tag === "INPUT") {
+          if (el.type === "checkbox" || el.type === "radio") {
+            if (!el.checked) { continue; }
+          }
+          data.push(encodeURIComponent(el.name) + "=" + encodeURIComponent(el.value || ""));
+        } else if (tag === "TEXTAREA" || tag === "SELECT") {
+          data.push(encodeURIComponent(el.name) + "=" + encodeURIComponent(el.value || ""));
+        } else if (tag === "BUTTON" && el.type === "submit") {
+          /* <button> elements have empty value by default; use "1" to match standard
+             HTML form submission behavior where a clicked submit button sends name=1 */
+          data.push(encodeURIComponent(el.name) + "=" + encodeURIComponent(el.value || "1"));
+        }
+      }
+      var body = data.join("&");
+      var url = form.getAttribute("action") || (window.location.href.split("#")[0]);
+
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", url, true);
+      xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+      xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState !== 4) { return; }
+        if (submitBtn) { submitBtn.disabled = false; }
+        var ok = (xhr.status >= 200 && xhr.status < 400);
+        var resp = ok ? (xhr.responseText || "") : "";
+        var looksOk = ok && (
+          resp.indexOf("saved") >= 0 ||
+          resp.indexOf("Saved") >= 0 ||
+          resp.indexOf("dashboard") >= 0 ||
+          resp.indexOf("success") >= 0 ||
+          resp.length > 200
+        );
+        if (looksOk) {
+          showSaveToast("Saved");
+          showInlineSaveStatus(form);
+          if (hint) { hint.textContent = "Saved successfully."; }
+        } else {
+          showSaveToast("Save request sent. If you do not see it later, try saving again.");
+          if (hint) { hint.textContent = "Save request sent. If you do not see it later, try saving again."; }
+        }
+      };
+      try { xhr.send(body); } catch (e) {
+        if (submitBtn) { submitBtn.disabled = false; }
+        showSaveToast("Save request sent. If you do not see it later, try saving again.");
+      }
+      return false;
+    }, true);
+  }
+
+  function wireSaveForms() {
+    var forms = document.querySelectorAll("form");
+    for (var i = 0; i < forms.length; i++) {
+      if (forms[i].querySelector("[name='save_set']")) {
+        interceptSaveForm(forms[i]);
+      }
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", wireSaveForms, {once: true});
+  } else {
+    wireSaveForms();
+  }
+
+  window.skaiInterceptSaveForm = interceptSaveForm;
+  window.skaiShowSaveToast = showSaveToast;
+})();
+[[/script]]
+
+<!-- SKAI Feature A: Run 9-Combo Default Batch -->
+[[script]]
+(function () {
+  "use strict";
+
+  var BATCH_COMBOS = [
+    { profile: "balanced",     strategy: "ai",    label: "Balanced x AI-Forward" },
+    { profile: "balanced",     strategy: "hybrid", label: "Balanced x Balanced Mix" },
+    { profile: "balanced",     strategy: "skip",   label: "Balanced x Skip Pattern Boost" },
+    { profile: "explorative",  strategy: "ai",    label: "Explorative x AI-Forward" },
+    { profile: "explorative",  strategy: "hybrid", label: "Explorative x Balanced Mix" },
+    { profile: "explorative",  strategy: "skip",   label: "Explorative x Skip Pattern Boost" },
+    { profile: "conservative", strategy: "ai",    label: "Conservative x AI-Forward" },
+    { profile: "conservative", strategy: "hybrid", label: "Conservative x Balanced Mix" },
+    { profile: "conservative", strategy: "skip",   label: "Conservative x Skip Pattern Boost" }
+  ];
+
+  var STORAGE_KEY = "skai_batch_results_v1";
+  var batchResults = [];
+  var batchRunning = false;
+  var batchStopped = false;
+  var batchIndex = 0;
+  var batchDoneCount = 0;
+
+  function persistResults() {
+    try {
+      var slim = [];
+      for (var i = 0; i < batchResults.length; i++) {
+        var r = batchResults[i];
+        slim.push({ combo: r.combo, text: r.text || "", done: !!r.done, mainNumbers: r.mainNumbers || [], extraNumbers: r.extraNumbers || [] });
+      }
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
+    } catch (_) {}
+  }
+
+  function loadPersistedResults() {
+    try {
+      var raw = sessionStorage.getItem(STORAGE_KEY);
+      if (!raw) { return []; }
+      return JSON.parse(raw) || [];
+    } catch (_) { return []; }
+  }
+
+  function qs(id) { return document.getElementById(id); }
+
+  function setCell(profile, strategy, content, className) {
+    var cell = qs("skai-cell-" + profile + "-" + strategy);
+    if (!cell) { return; }
+    cell.innerHTML = content;
+    cell.style.background = className === "running" ? "#eff6ff" :
+                            className === "done"    ? "#f0fdf4" :
+                            className === "error"   ? "#fef2f2" : "";
+  }
+
+  function updateProgress() {
+    var pt = qs("skai-batch-progress-text");
+    if (pt) { pt.textContent = "Completed " + batchDoneCount + " of 9"; }
+  }
+
+  function setCurrentLabel(label) {
+    var cl = qs("skai-batch-current-label");
+    if (cl) { cl.textContent = label; }
+  }
+
+  function showPanel() {
+    var p = qs("skai-batch-panel");
+    if (p) { p.style.display = "block"; }
+  }
+
+  function hideModal() {
+    var m = qs("skai-batch-modal");
+    if (m) { m.style.display = "none"; }
+  }
+
+  function selectProfile(profile) {
+    try {
+      var btns = document.querySelectorAll("[data-profile]");
+      for (var i = 0; i < btns.length; i++) {
+        var b = btns[i];
+        var isTarget = (String(b.getAttribute("data-profile")).toLowerCase() === profile);
+        b.setAttribute("aria-pressed", isTarget ? "true" : "false");
+        if (isTarget) {
+          b.className = (b.className || "").replace(/\bis-active\b/g, "").trim() + " is-active";
+        } else {
+          b.className = (b.className || "").replace(/\bis-active\b/g, "").trim();
+        }
+      }
+      var inp = qs("skai-risk-profile") || qs("skai-ai-risk-profile");
+      if (inp) { inp.value = profile; }
+    } catch (_) {}
+  }
+
+  function selectStrategy(strategy) {
+    try {
+      var btns = document.querySelectorAll("[data-strategy]");
+      for (var i = 0; i < btns.length; i++) {
+        var b = btns[i];
+        var isTarget = (String(b.getAttribute("data-strategy")).toLowerCase() === strategy);
+        b.setAttribute("aria-pressed", isTarget ? "true" : "false");
+        if (isTarget) {
+          b.className = (b.className || "").replace(/\bis-active\b/g, "").trim() + " is-active";
+        } else {
+          b.className = (b.className || "").replace(/\bis-active\b/g, "").trim();
+        }
+      }
+      var inp = qs("skai-strategy") || qs("skai-ai-strategy");
+      if (inp) { inp.value = strategy; }
+    } catch (_) {}
+  }
+
+  function captureResult() {
+    try {
+      var containers = [
+        "prediction",
+        "numberBreakdown",
+        "aiMainPredictionContainer",
+        "aiExtraPredictionContainer",
+        "skai-ai-results",
+        "skai-results",
+        "skaiResultsContainer",
+        "skai-output"
+      ];
+      var html = "";
+      var text = "";
+      for (var i = 0; i < containers.length; i++) {
+        var el = qs(containers[i]);
+        if (el && el.innerHTML && el.innerHTML.trim().length > 20) {
+          html += el.outerHTML;
+          text += (el.textContent || el.innerText || "").trim().substring(0, 2000);
+        }
+      }
+      if (!html) {
+        var picks = document.querySelectorAll(".number-ball, .skai-number-ball, .skai-pick, [class*='ball'], [class*='pick-number']");
+        if (picks.length > 0) {
+          var tmp = document.createElement("div");
+          for (var j = 0; j < picks.length && j < 30; j++) {
+            tmp.appendChild(picks[j].cloneNode(true));
+          }
+          html = tmp.innerHTML;
+          text = tmp.textContent || "";
+        }
+      }
+      var mainNums  = (window.skaiSaveMainOrdered  && window.skaiSaveMainOrdered.length)
+        ? window.skaiSaveMainOrdered.slice()  : [];
+      var extraNums = (window.skaiSaveExtraOrdered && window.skaiSaveExtraOrdered.length)
+        ? window.skaiSaveExtraOrdered.slice() : [];
+      return {
+        html: html || "(no picks captured)",
+        text: text || "(no picks captured)",
+        mainNumbers:  mainNums,
+        extraNumbers: extraNums
+      };
+    } catch (_) {
+      return { html: "(capture error)", text: "(capture error)", mainNumbers: [], extraNumbers: [] };
+    }
+  }
+
+  function runCombo(combo, onDone) {
+    try {
+      if (typeof window.skaiApplyCombo === "function") {
+        window.skaiApplyCombo(combo.profile, combo.strategy);
+      } else {
+        selectProfile(combo.profile);
+        selectStrategy(combo.strategy);
+      }
+    } catch (_) {}
+
+    try {
+      var _gvLog = function (id, def) {
+        var el = document.getElementById(id) || document.getElementById(id + "_ui");
+        var v = (el && el.value != null) ? String(el.value).trim() : "";
+        return v !== "" ? v : def;
+      };
+      var _ep  = _gvLog("epochs",         _gvLog("skaiadv_epochs",   "?"));
+      var _bs  = _gvLog("batchSize",      _gvLog("skaiadv_batch",    "?"));
+      var _dr  = _gvLog("dropoutRate",    _gvLog("skaiadv_dropout",  "?"));
+      var _lr  = _gvLog("learningRate",   _gvLog("skaiadv_lr",       "?"));
+      console.log("[SKAI batch] Running combo:", combo.label,
+        "| profile=" + combo.profile + ", strategy=" + combo.strategy,
+        "| epochs=" + _ep, "batchSize=" + _bs, "dropout=" + _dr, "lr=" + _lr
+      );
+      setCell(combo.profile, combo.strategy,
+        "Training... (" + _ep + " ep, " + combo.profile + "/" + combo.strategy + ")", "running");
+    } catch (_) {}
+
+    var finished = false;
+    var timeout = null;
+    var _doneFired      = false;
+    var _scoreDoneFired = false;
+    var _onMlStart = null;
+
+    function finish() {
+      if (finished) { return; }
+      finished = true;
+      try { clearTimeout(timeout); } catch (_) {}
+      if (_onMlStart) {
+        try { window.removeEventListener("skai:ml:start", _onMlStart, false); } catch (_) {}
+        _onMlStart = null;
+      }
+      try { console.log("[SKAI batch] combo done: " + combo.label +
+        " | doneFired=" + _doneFired + " scoreDoneFired=" + _scoreDoneFired); } catch (_) {}
+      var res = captureResult();
+      onDone(res);
+    }
+
+    function checkAllDone() {
+      if (_doneFired && _scoreDoneFired) { finish(); }
+    }
+
+    function registerCompletionListeners() {
+      if (finished) { return; }
+      window.addEventListener("skai:done", function onSkaiDone() {
+        try { window.removeEventListener("skai:done", onSkaiDone, false); } catch (_) {}
+        _doneFired = true;
+        checkAllDone();
+      }, false);
+      window.addEventListener("skai:score:done", function onScoreDone() {
+        try { window.removeEventListener("skai:score:done", onScoreDone, false); } catch (_) {}
+        _scoreDoneFired = true;
+        checkAllDone();
+      }, false);
+    }
+
+    _onMlStart = function onMlStart() {
+      try { window.removeEventListener("skai:ml:start", _onMlStart, false); } catch (_) {}
+      _onMlStart = null;
+      registerCompletionListeners();
+    };
+    window.addEventListener("skai:ml:start", _onMlStart, false);
+
+    timeout = setTimeout(finish, 300000); /* 5-minute max wait per combo run */
+
+    var runBtn = qs("startPrediction") || qs("runPrediction");
+    if (!runBtn) {
+      onDone({ html: "(run button not found)", text: "(run button not found)", mainNumbers: [], extraNumbers: [] });
+      return;
+    }
+    try {
+      window.__SKAI_RUNNING__ = false;
+    } catch (_) {}
+    try {
+      if (typeof runBtn.click === "function") { runBtn.click(); }
+      else {
+        var ev = document.createEvent("MouseEvents");
+        ev.initEvent("click", true, true);
+        runBtn.dispatchEvent(ev);
+      }
+    } catch (_) {
+      finish();
+    }
+  }
+
+  function runNext() {
+    if (batchStopped || batchIndex >= BATCH_COMBOS.length) {
+      onBatchEnd();
+      return;
+    }
+    var combo = BATCH_COMBOS[batchIndex];
+    setCell(combo.profile, combo.strategy, "Running...", "running");
+    setCurrentLabel(combo.label);
+    var idx = batchIndex;
+    batchIndex += 1;
+
+    runCombo(combo, function (res) {
+      if (batchStopped) {
+        onBatchEnd();
+        return;
+      }
+      batchResults[idx] = { combo: combo, html: res.html, text: res.text, done: true,
+                            mainNumbers: res.mainNumbers || [], extraNumbers: res.extraNumbers || [] };
+      persistResults();
+      batchDoneCount += 1;
+      updateProgress();
+      var viewHtml = "<span style='color:#16a34a;font-weight:600;'>Done</span> <a href='#' style='font-size:0.8rem;margin-left:4px;' data-batch-view='" + idx + "'>View</a>";
+      setCell(combo.profile, combo.strategy, viewHtml, "done");
+      setTimeout(runNext, 1800); /* 1.8-second cooldown between combo runs */
+    });
+  }
+
+  function onBatchEnd() {
+    batchRunning = false;
+    setCurrentLabel(batchStopped ? "Batch stopped." : "All runs complete.");
+    try { console.log("[SKAI batch] onBatchEnd: " + batchDoneCount + "/" + BATCH_COMBOS.length + " combos done, stopped=" + batchStopped); } catch (_) {}
+    var saveRow = qs("skai-batch-save-row");
+    if (saveRow && batchDoneCount > 0 && (batchStopped || batchDoneCount >= BATCH_COMBOS.length)) {
+      saveRow.style.display = "flex";
+    }
+    var stopBtn = qs("skai-batch-stop");
+    if (stopBtn) { stopBtn.disabled = true; }
+  }
+
+  function resetGrid() {
+    var cells = document.querySelectorAll("#skai-batch-grid td[data-profile]");
+    for (var i = 0; i < cells.length; i++) {
+      cells[i].innerHTML = "Pending";
+      cells[i].style.background = "";
+    }
+  }
+
+  function openDetail(idx) {
+    var r = batchResults[idx];
+    if (!r) { return; }
+    var detail = qs("skai-batch-detail");
+    var title = qs("skai-batch-detail-title");
+    var body = qs("skai-batch-detail-body");
+    if (!detail || !body) { return; }
+    if (title) { title.textContent = r.combo.label; }
+    body.textContent = r.text || "(no result text)";
+    detail.style.display = "block";
+    try { detail.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (_) {}
+  }
+
+  function saveAllSequential(indices, doneCallback, saveCount, totalCount) {
+    if (saveCount === undefined) { saveCount = 0; }
+    if (totalCount === undefined) { totalCount = indices.length; }
+    if (!indices || indices.length === 0) {
+      if (doneCallback) { doneCallback(); }
+      return;
+    }
+    var idx = indices[0];
+    var rest = indices.slice(1);
+    var r = batchResults[idx];
+    if (!r || !r.done) {
+      saveAllSequential(rest, doneCallback, saveCount, totalCount);
+      return;
+    }
+
+    try { selectProfile(r.combo.profile); } catch (_) {}
+    try { selectStrategy(r.combo.strategy); } catch (_) {}
+
+    var form = qs("savePredictionForm");
+    if (!form) {
+      saveAllSequential(rest, doneCallback, saveCount, totalCount);
+      return;
+    }
+
+    try {
+      if (r.mainNumbers && r.mainNumbers.length) {
+        window.skaiSaveMainOrdered  = r.mainNumbers.slice();
+        window.skaiSaveExtraOrdered = (r.extraNumbers && r.extraNumbers.length)
+          ? r.extraNumbers.slice() : [];
+        var mainField = document.getElementById("saveMainNumbers");
+        if (mainField) { mainField.value = r.mainNumbers.join(","); }
+        var extraField = document.getElementById("saveExtraBallNumbers");
+        if (extraField) { extraField.value = (r.extraNumbers || []).join(","); }
+      }
+      /* Update label to include combo name so each save is distinct */
+      var LABEL_DELIMITER = " | ";
+      var labelField = document.getElementById("saveLabel");
+      if (labelField && r.combo && r.combo.label) {
+        var baseLbl = labelField.value || "Prediction";
+        /* Strip any previous combo suffix (format: "... | Combo Name") */
+        var pipeIdx = baseLbl.indexOf(LABEL_DELIMITER);
+        if (pipeIdx >= 0) { baseLbl = baseLbl.substring(0, pipeIdx); }
+        labelField.value = baseLbl + LABEL_DELIMITER + r.combo.label;
+      }
+    } catch (_) {}
+
+    /* Show saving progress: Saving 1 of 9, 2 of 9 ... */
+    var currentSaveNum = saveCount + 1;
+    if (window.skaiShowSaveToast) {
+      window.skaiShowSaveToast("Saving " + currentSaveNum + " of " + totalCount + "...");
+    }
+
+    var ev = document.createEvent("Event");
+    ev.initEvent("submit", true, true);
+    form.dispatchEvent(ev);
+
+    setTimeout(function () {
+      saveAllSequential(rest, doneCallback, currentSaveNum, totalCount);
+    }, 2500); /* 2.5-second delay between sequential saves */
+  }
+
+  function wireButtons() {
+    var launchBtn = qs("skai-batch-launch");
+    var modal = qs("skai-batch-modal");
+    var confirmBtn = qs("skai-batch-confirm");
+    var cancelBtn = qs("skai-batch-cancel");
+    var stopBtn = qs("skai-batch-stop");
+    var clearBtn = qs("skai-batch-clear");
+    var detailClose = qs("skai-batch-detail-close");
+    var saveAllBtn = qs("skai-batch-save-all");
+    var saveSelBtn = qs("skai-batch-save-selected");
+
+    if (launchBtn) {
+      launchBtn.addEventListener("click", function () {
+        if (modal) { modal.style.display = "flex"; }
+      }, false);
+    }
+
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", function () {
+        if (modal) { modal.style.display = "none"; }
+      }, false);
+    }
+
+    if (modal) {
+      modal.addEventListener("click", function (e) {
+        if (e.target === modal) { modal.style.display = "none"; }
+      }, false);
+    }
+
+    if (confirmBtn) {
+      confirmBtn.addEventListener("click", function () {
+        hideModal();
+        if (batchRunning) { return; }
+        batchRunning = true;
+        batchStopped = false;
+        batchIndex = 0;
+        batchDoneCount = 0;
+        batchResults = [];
+        var saveRow = qs("skai-batch-save-row");
+        if (saveRow) { saveRow.style.display = "none"; }
+        var stopBtn2 = qs("skai-batch-stop");
+        if (stopBtn2) { stopBtn2.disabled = false; }
+        var detailEl = qs("skai-batch-detail");
+        if (detailEl) { detailEl.style.display = "none"; }
+        resetGrid();
+        showPanel();
+        updateProgress();
+        setCurrentLabel("Starting...");
+        setTimeout(runNext, 400);
+      }, false);
+    }
+
+    if (stopBtn) {
+      stopBtn.addEventListener("click", function () {
+        batchStopped = true;
+        batchRunning = false;
+        setCurrentLabel("Stopping...");
+      }, false);
+    }
+
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function () {
+        batchStopped = true;
+        batchRunning = false;
+        batchResults = [];
+        batchDoneCount = 0;
+        batchIndex = 0;
+        try { sessionStorage.removeItem(STORAGE_KEY); } catch (_) {}
+        resetGrid();
+        updateProgress();
+        setCurrentLabel("Ready");
+        var detail2 = qs("skai-batch-detail");
+        if (detail2) { detail2.style.display = "none"; }
+        var saveRow2 = qs("skai-batch-save-row");
+        if (saveRow2) { saveRow2.style.display = "none"; }
+      }, false);
+    }
+
+    if (detailClose) {
+      detailClose.addEventListener("click", function () {
+        var d = qs("skai-batch-detail");
+        if (d) { d.style.display = "none"; }
+      }, false);
+    }
+
+    var grid = qs("skai-batch-grid");
+    if (grid) {
+      grid.addEventListener("click", function (e) {
+        var t = e.target;
+        if (t && t.getAttribute("data-batch-view") !== null) {
+          try { e.preventDefault(); } catch (_) {}
+          openDetail(parseInt(t.getAttribute("data-batch-view"), 10));
+        }
+      }, false);
+    }
+
+    if (saveAllBtn) {
+      saveAllBtn.addEventListener("click", function () {
+        if (!window.confirm("This will save each completed run one by one to your dashboard. Continue?")) { return; }
+        var indices = [];
+        for (var i = 0; i < batchResults.length; i++) {
+          if (batchResults[i] && batchResults[i].done) { indices.push(i); }
+        }
+        if (indices.length === 0) {
+          alert("No completed runs to save.");
+          return;
+        }
+        var totalRuns = indices.length;
+        saveAllSequential(indices, function () {
+          if (window.skaiShowSaveToast) { window.skaiShowSaveToast("All " + totalRuns + " " + (totalRuns === 1 ? "run" : "runs") + " saved to your dashboard."); }
+        });
+      }, false);
+    }
+
+    if (saveSelBtn) {
+      saveSelBtn.addEventListener("click", function () {
+        var available = [];
+        for (var i = 0; i < batchResults.length; i++) {
+          if (batchResults[i] && batchResults[i].done) { available.push(i); }
+        }
+        if (available.length === 0) {
+          alert("No completed runs to save.");
+          return;
+        }
+        var labels = [];
+        for (var j = 0; j < available.length; j++) {
+          labels.push((j + 1) + ". " + batchResults[available[j]].combo.label);
+        }
+        var input = window.prompt(
+          "Enter the numbers (comma-separated) of the runs you want to save:\n\n" + labels.join("\n"),
+          "1"
+        );
+        if (!input) { return; }
+        var chosen = [];
+        var parts = input.split(",");
+        for (var k = 0; k < parts.length; k++) {
+          var n = parseInt(parts[k].trim(), 10);
+          if (!isNaN(n) && n >= 1 && n <= available.length) {
+            chosen.push(available[n - 1]);
+          }
+        }
+        if (chosen.length === 0) { alert("No valid selections."); return; }
+        saveAllSequential(chosen, function () {
+          if (window.skaiShowSaveToast) { window.skaiShowSaveToast("Selected runs saved."); }
+        });
+      }, false);
+    }
+  }
+
+  function init() {
+    wireButtons();
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch (_) {}
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init, {once: true});
+  } else {
+    init();
+  }
+})();
+[[/script]]
+[[/body]]
+[[/html]]
+
+{/source}
