@@ -1290,20 +1290,27 @@ button.button-reset:hover{
     [[/li]]
   [[/ul]]
 
-  <!-- Free-access announcement banner -->
-  [[div style="background:linear-gradient(135deg,#0A1A33 0%,#1C66FF 100%);border-radius:14px;padding:20px 24px;margin:20px 0;color:#fff;text-align:center;"]]
-    [[p style="font-size:1.05rem;font-weight:700;margin:0 0 6px 0;line-height:1.4;"]]
-      [[span aria-hidden="true"]]🎯[[/span]] Free for Registered Lottery Enthusiasts
+  <?php if (!$userIsInAllowedGroup): ?>
+  <!-- Free-access announcement banner (shown to non-registered users only) -->
+  [[div style="background:linear-gradient(135deg,#0A1A33 0%,#1C66FF 100%);border-radius:14px;padding:22px 28px;margin:20px 0;color:#fff;text-align:center;"]]
+    [[p style="font-size:1.15rem;font-weight:700;margin:0 0 10px 0;line-height:1.4;"]]
+      Try the AI Prediction Engine &mdash; Free
     [[/p]]
-    [[p style="font-size:0.9rem;opacity:0.88;margin:0 0 14px 0;line-height:1.5;"]]
-      The LottoExpert AI Engine is available at no cost to registered members — for [[strong]]Powerball[[/strong]] and [[strong]]EuroMillions[[/strong]] only.
-      Not a member yet? Sign up free and start playing smarter today.
+    [[p style="font-size:0.95rem;font-weight:600;opacity:0.95;margin:0 0 10px 0;line-height:1.5;"]]
+      Registered Lottery Enthusiasts can run the AI for [[strong]]Powerball[[/strong]] and [[strong]]EuroMillions[[/strong]] at no cost.
+    [[/p]]
+    [[p style="font-size:0.9rem;opacity:0.88;margin:0 0 10px 0;line-height:1.6;"]]
+      Create your free account to explore how LottoExpert's analytical AI evaluates number patterns, probability behavior, and draw history.
+    [[/p]]
+    [[p style="font-size:0.88rem;opacity:0.8;margin:0 0 18px 0;line-height:1.5;font-style:italic;"]]
+      No hype. Just intelligent lottery analysis.
     [[/p]]
     [[a href="/membership/lottoexpert-subscriptions" target="_blank" rel="noopener noreferrer"
-       style="display:inline-block;background:#fff;color:#1C66FF;font-weight:700;font-size:0.95rem;padding:9px 22px;border-radius:999px;text-decoration:none;"]]
-      Sign Up Free &rarr;
+       style="display:inline-block;background:#fff;color:#1C66FF;font-weight:700;font-size:0.95rem;padding:10px 26px;border-radius:999px;text-decoration:none;"]]
+      &rarr; Create your free account and start exploring
     [[/a]]
   [[/div]]
+  <?php endif; ?>
 
     <!-- Start Analysis Buttons -->
     <?php if ($userIsInAllowedGroup): ?>
