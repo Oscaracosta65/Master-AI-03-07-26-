@@ -1290,6 +1290,21 @@ button.button-reset:hover{
     [[/li]]
   [[/ul]]
 
+  <!-- Free-access announcement banner -->
+  [[div style="background:linear-gradient(135deg,#0A1A33 0%,#1C66FF 100%);border-radius:14px;padding:20px 24px;margin:20px 0;color:#fff;text-align:center;"]]
+    [[p style="font-size:1.05rem;font-weight:700;margin:0 0 6px 0;line-height:1.4;"]]
+      [[span aria-hidden="true"]]🎯[[/span]] Free for Registered Lottery Enthusiasts
+    [[/p]]
+    [[p style="font-size:0.9rem;opacity:0.88;margin:0 0 14px 0;line-height:1.5;"]]
+      The LottoExpert AI Engine is available at no cost to registered members — for [[strong]]Powerball[[/strong]] and [[strong]]EuroMillions[[/strong]] only.
+      Not a member yet? Sign up free and start playing smarter today.
+    [[/p]]
+    [[a href="/membership/lottoexpert-subscriptions" target="_blank" rel="noopener noreferrer"
+       style="display:inline-block;background:#fff;color:#1C66FF;font-weight:700;font-size:0.95rem;padding:9px 22px;border-radius:999px;text-decoration:none;"]]
+      Sign Up Free &rarr;
+    [[/a]]
+  [[/div]]
+
     <!-- Start Analysis Buttons -->
     <?php if ($userIsInAllowedGroup): ?>
       <!-- SKAI Guided UX: CTA context label -->
